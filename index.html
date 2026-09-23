@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css?v=1.9.0">
+<link rel="stylesheet" href="css/app.css?v=1.10.0">
 </head>
 <body>
 <header class="top">
@@ -44,6 +44,7 @@
   <button role="tab" data-tab="names">⑤ 感測器編號與名稱</button>
   <button role="tab" data-tab="backup">⑥ 備份與還原</button>
   <button role="tab" data-tab="noise">⑦ 噪音時段設定</button>
+  <button role="tab" data-tab="box">⑧ 盒鬚圖</button>
 </nav>
 
 <main class="wrap">
@@ -244,6 +245,39 @@
     </div>
   </section>
 
+  <!-- ⑧ 盒鬚圖 -->
+  <section id="tab-box" class="panel" hidden>
+    <div class="card">
+      <h2>盒鬚圖</h2>
+      <p class="hint">選一段期間，把每台感測器在這段期間的<b>逐時有效數值</b>畫成盒鬚圖（每個測項一張），用來比較各感測器有沒有明顯異常。採用的數值和報表相同：異常值、空白、PM 為 0、PM2.5 大於 PM10、備註時段／疑似異常／手動設為不採用的小時都不列入。</p>
+      <div class="modes">
+        <label><input type="radio" name="bxMode" value="month" checked> 單月</label>
+        <label><input type="radio" name="bxMode" value="months"> 月份區間</label>
+        <label><input type="radio" name="bxMode" value="quarters"> 季別區間</label>
+        <label><input type="radio" name="bxMode" value="dates"> 自訂日期</label>
+      </div>
+      <div class="row" data-bx="month"><select id="bxMonth"></select></div>
+      <div class="row" data-bx="months" hidden>從 <select id="bxMFrom"></select> 到 <select id="bxMTo"></select></div>
+      <div class="row" data-bx="quarters" hidden>從 民國 <input type="number" id="bxQY1" class="num" min="100" max="200"> 年 <select id="bxQ1"><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select>
+        到 民國 <input type="number" id="bxQY2" class="num" min="100" max="200"> 年 <select id="bxQ2"><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select></div>
+      <div class="row" data-bx="dates" hidden>從 <input type="date" id="bxDFrom"> 到 <input type="date" id="bxDTo"></div>
+      <h3>測項</h3>
+      <div class="row" id="bxFields"></div>
+      <h3>感測器 <span class="hint">（X 軸以「⑤ 感測器編號與名稱」設定的名稱表示；不想畫的取消勾選，會記住）</span></h3>
+      <div class="row"><button type="button" id="bxAll">全選</button><button type="button" id="bxNone">全不選</button></div>
+      <div id="bxSensors" class="nflist"></div>
+      <h3>圖的設定</h3>
+      <label class="opt"><input type="checkbox" id="bxTitle" checked> 圖上方顯示測項名稱（標題）</label>
+      <label class="opt"><input type="checkbox" id="bxYNums" checked> Y 軸顯示刻度數字（取消勾選則圖上完全沒有數字）</label>
+      <label class="opt"><input type="checkbox" id="bxOut"> 顯示離群值（超過 1.5 倍四分位距的點）</label>
+      <div class="row">X 軸名稱 <input type="text" id="bxXTitle" value="感測器" style="width:160px"></div>
+      <details class="notefilter"><summary>Y 軸範圍（空白＝自動）</summary><div id="bxYRange"></div></details>
+      <div class="row"><button type="button" id="bxGo" class="primary">產生盒鬚圖</button><button type="button" id="bxXlsx" disabled>下載 Excel（可編輯）</button><button type="button" id="bxPngs" disabled>下載全部圖片（高解析度 PNG，zip）</button></div>
+      <div id="bxMsg"></div>
+    </div>
+    <div id="bxOut2"></div>
+  </section>
+
   <!-- ⑦ 噪音時段 -->
   <section id="tab-noise" class="panel" hidden>
     <div class="card">
@@ -316,14 +350,17 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.9.0"></script>
-<script src="js/version.js?v=1.9.0"></script>
-<script src="js/core.js?v=1.9.0"></script>
-<script src="js/parser.js?v=1.9.0"></script>
-<script src="js/xlsxio.js?v=1.9.0"></script>
-<script src="js/model.js?v=1.9.0"></script>
-<script src="js/store.js?v=1.9.0"></script>
-<script src="js/app.js?v=1.9.0"></script>
+<script src="vendor/exceljs.min.js?v=1.10.0"></script>
+<script src="js/version.js?v=1.10.0"></script>
+<script src="js/core.js?v=1.10.0"></script>
+<script src="js/parser.js?v=1.10.0"></script>
+<script src="js/xlsxio.js?v=1.10.0"></script>
+<script src="js/model.js?v=1.10.0"></script>
+<script src="js/store.js?v=1.10.0"></script>
+<script src="vendor/jszip.min.js?v=1.10.0"></script>
+<script src="js/boxstyle.js?v=1.10.0"></script>
+<script src="js/boxplot.js?v=1.10.0"></script>
+<script src="js/app.js?v=1.10.0"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>

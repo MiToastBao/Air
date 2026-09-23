@@ -512,3 +512,51 @@ test('Excel：噪音 Leq 日／晚／夜超過標準（嚴格大於）才粗體�
   const wb2 = X.buildNoiseWorkbook(ExcelJS, rows, { std: { DAY: 75, EVE: 85, NIGHT: 70 } });
   assert.equal(wb2.overCount, 0);
 });
+
+test('盒鬚圖統計：四分位數同 Excel QUARTILE.INC，鬚到 1.5 倍四分位距內最遠的點', () => {
+  const B = require('../js/boxplot.js');
+  const s = B.boxStats([1, 2, 3, 4, 5, 6, 7, 8, 9, 100]);
+  // Excel：QUARTILE.INC({1..9,100},1)=3.25、2=5.5、3=7.75
+  assert.deepEqual([s.q1, s.med, s.q3], [3.25, 5.5, 7.75]);
+  assert.deepEqual([s.lo, s.hi, s.outliers], [1, 9, [100]]);
+  assert.deepEqual(B.boxStats([5]).q1, 5);
+  assert.equal(B.boxStats([]), null);
+  const hp = B.hourPeriods(Core.noiseCfg(null));
+  assert.deepEqual([hp[0], hp[5], hp[6], hp[19], hp[20], hp[21], hp[22], hp[23]], ['NIGHT', 'NIGHT', 'DAY', 'DAY', 'EVE', 'EVE', 'NIGHT', 'NIGHT']);
+});
+
+test('盒鬚圖 Excel：每個測項一張原生盒鬚圖（chartEx），資料範圍、類別、內容類型都正確', async () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const JSZip = require('../vendor/jszip.min.js');
+  const B = require('../js/boxplot.js');
+  const style = require('../js/boxstyle.js');
+  const g = (name, vals) => ({ name, rows: vals.map((v, i) => ({ ts: '2026-07-01 ' + String(i).padStart(2, '0') + ':00', v })), stats: B.boxStats(vals) });
+  const charts = [
+    { sheet: 'PM2.5', title: 'PM2.5', xTitle: '感測器', yTitle: 'PM2.5（μg/m³）', showTitle: true, showYNums: true, groups: [g('甲', [1, 2, 3]), g("乙's", [4, 5])] },
+    { sheet: '溫度', title: '溫度', xTitle: '感測器', yTitle: '溫度（℃）', yMin: 10, showYNums: false, groups: [g('甲', [20, 21])] }
+  ];
+  const buf = await B.buildBoxWorkbook(ExcelJS, JSZip, charts, ['說明'], style);
+  const zip = await JSZip.loadAsync(buf);
+  const wbx = await zip.file('xl/workbook.xml').async('string');
+  assert.match(wbx, /<definedName name="_xlchart\.v1\.0" hidden="1">'PM2\.5'!\$L\$2:\$L\$6<\/definedName>/);
+  assert.match(wbx, /<definedName name="_xlchart\.v1\.1" hidden="1">'PM2\.5'!\$N\$2:\$N\$6<\/definedName>/);
+  assert.match(wbx, /_xlchart\.v1\.4" hidden="1">'溫度'!\$N\$2:\$N\$3</);
+  const c1 = await zip.file('xl/charts/chartEx1.xml').async('string');
+  assert.match(c1, /<cx:strDim type="cat"><cx:f>_xlchart\.v1\.0<\/cx:f>/);
+  assert.match(c1, /quartileMethod="inclusive"/);
+  assert.match(c1, /<cx:tickLabels\/>.*<cx:tickLabels\/>/);
+  const c2 = await zip.file('xl/charts/chartEx2.xml').async('string');
+  assert.match(c2, /valScaling min="10"/);
+  assert.equal((c2.match(/<cx:tickLabels\/>/g) || []).length, 1); // Y 軸不顯示數字
+  const ct = await zip.file('[Content_Types].xml').async('string');
+  ['/xl/charts/chartEx1.xml', '/xl/charts/style2.xml', '/xl/drawings/drawing2.xml'].forEach(p => assert.ok(ct.includes('PartName="' + p + '"'), p));
+  const sh = await zip.file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(sh, /<drawing r:id="rIdBox1"\/>/);
+  const rels = await zip.file('xl/worksheets/_rels/sheet1.xml.rels').async('string');
+  assert.match(rels, /Target="\.\.\/drawings\/drawing1\.xml"/);
+  // 資料可讀回（感測器、數值）
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf);
+  const ws = wb.getWorksheet('PM2.5');
+  assert.deepEqual([ws.getCell('L1').value, ws.getCell('L2').value, ws.getCell('N2').value, ws.getCell('L5').value], ['感測器', '甲', 1, "乙's"]);
+  assert.equal(wb.getWorksheet('統計').getRow(2).getCell(3).value, 3);
+});

@@ -135,3 +135,9 @@ tr.oldm{display:none}
 table.showall tr.oldm{display:table-row}
 details.fold > summary{list-style:none}
 details.fold > summary::-webkit-details-marker{display:none}
+.bxfig{margin:12px 0}
+.bxfig canvas{max-width:100%;height:auto;border:1px solid var(--line);background:#fff}
+.bxfig .row{margin:4px 0}
+#bxSensors label{display:block;break-inside:avoid}
+#bxSensors{max-height:none}
+.tabs button{padding:8px 11px;font-size:14.5px}

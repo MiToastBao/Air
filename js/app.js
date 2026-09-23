@@ -23,6 +23,7 @@
       if (b.dataset.tab === 'data') renderCoverage();
       if (b.dataset.tab === 'report') { updateRangeInfo(); renderNoiseNow(); }
       if (b.dataset.tab === 'noise') renderNoiseForm();
+      if (b.dataset.tab === 'box') renderBoxForm();
       if (b.dataset.tab === 'names') { renderNames(); renderLife(); }
       if (b.dataset.tab === 'backup') refreshStorage();
       if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); renderSuspects(); renderAutoForm(); renderGaps(); }
@@ -1631,5 +1632,193 @@
       renderNoiseForm();
       $('noiseMsg').innerHTML = '<span class="msg ok">已儲存（只套用在目前計畫）。之後下載的噪音報表會用新的時段計算。</span>';
     }).catch(function (er) { $('noiseMsg').innerHTML = '<span class="msg err">儲存失敗：' + esc(er.message || er) + '</span>'; });
+  });
+
+  // ---------------- ⑧ 盒鬚圖 ----------------
+  var BX = window.EnvBox, bxResult = null;
+  var collator = new Intl.Collator('zh-Hant-TW', { numeric: true });
+  function bxMode() { var r = document.querySelector('input[name=bxMode]:checked'); return r ? r.value : 'month'; }
+  document.querySelectorAll('input[name=bxMode]').forEach(function (r) {
+    r.addEventListener('change', function () { document.querySelectorAll('[data-bx]').forEach(function (el) { el.hidden = el.dataset.bx !== bxMode(); }); bxDirty(); });
+  });
+  function bxRange() {
+    var md = bxMode(), ms = allMonths();
+    if (!ms.length) return { error: '尚未匯入資料。' };
+    var end = function (m) { return m + '-' + daysInMonth(m); };
+    if (md === 'month') { var m = $('bxMonth').value; return m ? { from: m + '-01', to: end(m), label: ymRoc(m), title: rocMonth(m) } : { error: '請選擇月份。' }; }
+    if (md === 'months') {
+      var a = $('bxMFrom').value, b = $('bxMTo').value;
+      if (a > b) return { error: '起始月份晚於結束月份。' };
+      return { from: a + '-01', to: end(b), label: ymRoc(a) + '-' + ymRoc(b), title: rocMonth(a) + '～' + rocMonth(b) };
+    }
+    if (md === 'quarters') {
+      var y1 = Number($('bxQY1').value), q1 = Number($('bxQ1').value), y2 = Number($('bxQY2').value), q2 = Number($('bxQ2').value);
+      if (!(y1 >= 1 && y2 >= 1)) return { error: '請輸入民國年。' };
+      var r1 = Core.quarterRange(y1, q1), r2 = Core.quarterRange(y2, q2);
+      if (r1.from > r2.from) return { error: '起始季別晚於結束季別。' };
+      return { from: r1.from, to: r2.to, label: y1 + 'Q' + q1 + (r1.from === r2.from ? '' : '-' + y2 + 'Q' + q2), title: y1 + '年第' + q1 + '季' + (r1.from === r2.from ? '' : '～' + y2 + '年第' + q2 + '季') };
+    }
+    var f = $('bxDFrom').value, t = $('bxDTo').value;
+    if (!f || !t) return { error: '請選擇起訖日期。' };
+    if (f > t) return { error: '起始日期晚於結束日期。' };
+    return { from: f, to: t, label: dRoc(f) + '-' + dRoc(t), title: Core.toRoc(f) + '～' + Core.toRoc(t) };
+  }
+  function bxSet() { return settings().box || {}; }
+  function bxSave(patch) {
+    if (state.loadError) return;
+    var v = {}; Object.keys(settings()).forEach(function (k) { v[k] = settings()[k]; });
+    var b = {}; Object.keys(bxSet()).forEach(function (k) { b[k] = bxSet()[k]; });
+    Object.keys(patch).forEach(function (k) { b[k] = patch[k]; });
+    v.box = b; state.meta.settings = v;
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).catch(function () {});
+  }
+  function bxFieldKey(x) { return x.f + (x.period ? '_' + x.period : ''); }
+  var bxFormReady = false;
+  function renderBoxForm() {
+    var ms = allMonths(), bs = bxSet();
+    var opts = ms.map(function (m) { return '<option value="' + m + '">' + rocMonth(m) + '</option>'; }).join('');
+    ['bxMonth', 'bxMFrom', 'bxMTo'].forEach(function (id) { var k = $(id).value; $(id).innerHTML = opts; if (k && ms.indexOf(k) >= 0) $(id).value = k; });
+    if (ms.length) {
+      if (!$('bxMonth').value || ms.indexOf($('bxMonth').value) < 0) $('bxMonth').value = ms[ms.length - 1];
+      if (!bxFormReady) { $('bxMonth').value = ms[ms.length - 1]; $('bxMFrom').value = ms[0]; $('bxMTo').value = ms[ms.length - 1]; }
+      var roc = function (m) { return Number(m.slice(0, 4)) - 1911; }, q = function (m) { return Math.floor((Number(m.slice(5, 7)) - 1) / 3) + 1; };
+      if (!$('bxQY1').value) { $('bxQY1').value = roc(ms[0]); $('bxQ1').value = q(ms[0]); $('bxQY2').value = roc(ms[ms.length - 1]); $('bxQ2').value = q(ms[ms.length - 1]); }
+    }
+    // 測項
+    var offF = bs.offFields || [];
+    $('bxFields').innerHTML = BX.BOX_FIELDS.map(function (x) {
+      var k = bxFieldKey(x);
+      return '<label class="bf"><input type="checkbox" data-bxf="' + k + '"' + (offF.indexOf(k) < 0 ? ' checked' : '') + '> ' + esc(x.title) + '</label>';
+    }).join('');
+    // 感測器（有盒鬚圖測項的）
+    var off = bs.offSensors || [], list = allSensorMeta().filter(function (s) {
+      var fl = {}; state.chunks.forEach(function (c) { if (c.id === s.id) c.fields.forEach(function (f) { fl[f] = true; }); });
+      return BX.BOX_FIELDS.some(function (x) { return fl[x.f]; });
+    }).sort(function (a, b) { return collator.compare(a.name, b.name); });
+    $('bxSensors').innerHTML = list.length ? list.map(function (s) {
+      return '<label><input type="checkbox" data-bxs="' + esc(s.id) + '"' + (off.indexOf(s.id) < 0 ? ' checked' : '') + '> ' + esc(s.name) + ' <span class="hint">' + esc(s.id) + '</span></label>';
+    }).join('') : '<p class="hint">尚未匯入任何資料。</p>';
+    // 圖的設定
+    if (!bxFormReady) {
+      if (typeof bs.title === 'boolean') $('bxTitle').checked = bs.title;
+      if (typeof bs.yNums === 'boolean') $('bxYNums').checked = bs.yNums;
+      if (typeof bs.outliers === 'boolean') $('bxOut').checked = bs.outliers;
+      if (typeof bs.xTitle === 'string' && bs.xTitle) $('bxXTitle').value = bs.xTitle;
+    }
+    var yr = bs.yRange || {};
+    $('bxYRange').innerHTML = '<table><tr><th class="l">測項</th><th>Y 最小</th><th>Y 最大</th></tr>' + BX.BOX_FIELDS.map(function (x) {
+      var k = bxFieldKey(x), v = yr[k] || {};
+      return '<tr><td class="l">' + esc(x.title) + '</td><td><input type="number" step="any" class="num" data-bxy="' + k + '|min" value="' + (typeof v.min === 'number' ? v.min : '') + '"></td><td><input type="number" step="any" class="num" data-bxy="' + k + '|max" value="' + (typeof v.max === 'number' ? v.max : '') + '"></td></tr>';
+    }).join('') + '</table>';
+    bxFormReady = true;
+  }
+  function bxDirty() { if (bxResult) { bxResult = null; $('bxXlsx').disabled = true; $('bxPngs').disabled = true; $('bxMsg').innerHTML = '<div class="msg info">設定已變更，請重新按「產生盒鬚圖」。</div>'; } }
+  $('tab-box').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.dataset.bxs !== undefined || t.dataset.bxs) bxSave({ offSensors: Array.prototype.map.call(document.querySelectorAll('[data-bxs]:not(:checked)'), function (x) { return x.dataset.bxs; }) });
+    if (t.dataset.bxf) bxSave({ offFields: Array.prototype.map.call(document.querySelectorAll('[data-bxf]:not(:checked)'), function (x) { return x.dataset.bxf; }) });
+    if (t.dataset.bxy) {
+      var yr = {}; document.querySelectorAll('[data-bxy]').forEach(function (x) { var p = x.dataset.bxy.split('|'), n = Number(x.value); if (x.value !== '' && isFinite(n)) { (yr[p[0]] = yr[p[0]] || {})[p[1]] = n; } });
+      bxSave({ yRange: yr });
+    }
+    if (t.id === 'bxTitle' || t.id === 'bxYNums' || t.id === 'bxOut' || t.id === 'bxXTitle') bxSave({ title: $('bxTitle').checked, yNums: $('bxYNums').checked, outliers: $('bxOut').checked, xTitle: $('bxXTitle').value.trim() || '感測器' });
+    bxDirty();
+  });
+  $('bxAll').addEventListener('click', function () { document.querySelectorAll('[data-bxs]').forEach(function (x) { x.checked = true; }); bxSave({ offSensors: [] }); bxDirty(); });
+  $('bxNone').addEventListener('click', function () { document.querySelectorAll('[data-bxs]').forEach(function (x) { x.checked = false; }); bxSave({ offSensors: Array.prototype.map.call(document.querySelectorAll('[data-bxs]'), function (x) { return x.dataset.bxs; }) }); bxDirty(); });
+
+  /** 依目前設定整理每個測項、每台感測器的逐時有效數值 */
+  function bxCollect(r) {
+    var zero = $('optPmZero').checked ? Core.ZERO_INVALID : [], ratio = $('optPmRatio').checked;
+    var hp = BX.hourPeriods(Core.noiseCfg(settings().noise));
+    var on = {}; document.querySelectorAll('[data-bxs]:checked').forEach(function (x) { on[x.dataset.bxs] = true; });
+    var fOn = {}; document.querySelectorAll('[data-bxf]:checked').forEach(function (x) { fOn[x.dataset.bxf] = true; });
+    var yr = bxSet().yRange || {};
+    var sensors = proc().sensors.filter(function (s) { return on[s.id]; }).sort(function (a, b) { return collator.compare(sensorName(a.id), sensorName(b.id)); });
+    var from = r.from + ' 00:00', to = r.to + ' 23:59';
+    var charts = [];
+    BX.BOX_FIELDS.forEach(function (x) {
+      var k = bxFieldKey(x); if (!fOn[k]) return;
+      var groups = [], empty = [];
+      sensors.forEach(function (s) {
+        if (s.fields.indexOf(x.f) < 0) return;
+        var rows = [];
+        s.rows.forEach(function (row) {
+          if (row.ts < from || row.ts > to) return;
+          if (x.period && hp[Number(row.ts.slice(11, 13))] !== x.period) return;
+          if (!M.counted(row, x.f, zero, ratio)) return;
+          rows.push({ ts: row.ts, v: row.v[x.f] });
+        });
+        if (!rows.length) { empty.push(sensorName(s.id)); return; }
+        groups.push({ id: s.id, name: sensorName(s.id), rows: rows, stats: BX.boxStats(rows.map(function (q) { return q.v; })) });
+      });
+      var y = yr[k] || {};
+      charts.push({ key: k, field: x.f, sheet: x.sheet, title: x.title, yTitle: x.y, xTitle: $('bxXTitle').value.trim() || '感測器', yMin: y.min, yMax: y.max,
+        showTitle: $('bxTitle').checked, showYNums: $('bxYNums').checked, showOutliers: $('bxOut').checked, groups: groups, empty: empty });
+    });
+    return charts;
+  }
+  $('bxGo').addEventListener('click', function () {
+    var r = bxRange();
+    if (r.error) { $('bxMsg').innerHTML = '<div class="msg err">' + esc(r.error) + '</div>'; return; }
+    $('bxMsg').innerHTML = '<div class="msg info">計算中…</div>';
+    paint().then(function () {
+      var all = bxCollect(r);
+      var charts = all.filter(function (c) { return c.groups.length; });
+      var skipped = all.filter(function (c) { return !c.groups.length; }).map(function (c) { return c.title; });
+      if (!charts.length) { $('bxOut2').innerHTML = ''; $('bxMsg').innerHTML = '<div class="msg err">這個期間、勾選的感測器與測項沒有任何有效數值。</div>'; return; }
+      bxResult = { range: r, charts: charts };
+      var h = '';
+      charts.forEach(function (c, i) {
+        h += '<div class="card bxfig"><h3>' + esc(c.title) + ' <span class="hint">（' + c.groups.length + ' 台感測器，共 ' + c.groups.reduce(function (a, g) { return a + g.stats.n; }, 0).toLocaleString() + ' 個逐時有效數值）</span></h3>' +
+          '<canvas data-bxc="' + i + '"></canvas><div class="row"><button type="button" data-bxpng="' + i + '">下載這張圖（PNG）</button>' +
+          (c.empty.length ? '<span class="hint">沒有有效數值、未列入：' + esc(c.empty.join('、')) + '</span>' : '') + '</div></div>';
+      });
+      $('bxOut2').innerHTML = h;
+      charts.forEach(function (c, i) { BX.drawBoxPlot(document.querySelector('canvas[data-bxc="' + i + '"]'), c, 1.5); });
+      $('bxXlsx').disabled = false; $('bxPngs').disabled = false;
+      var have = {}; allMonths().forEach(function (m) { have[m] = true; });
+      var miss = M.monthsInRange(r).filter(function (m) { return !have[m]; });
+      $('bxMsg').innerHTML = '<div class="msg ok">期間 <b>' + esc(r.title) + '</b>（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '）：已產生 ' + charts.length + ' 張盒鬚圖。' +
+        (skipped.length ? '沒有有效數值、未產生：' + esc(skipped.join('、')) + '。' : '') + '</div>' +
+        (miss.length ? '<div class="msg warn">以下月份尚未匯入，圖中沒有這些月份的資料：' + miss.map(rocMonth).join('、') + '。</div>' : '');
+    });
+  });
+  function bxFileBase() { var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : ''; return pc + '盒鬚圖_' + bxResult.range.label; }
+  function bxPngBlob(c) {
+    return new Promise(function (res) { var cv = document.createElement('canvas'); BX.drawBoxPlot(cv, c, 3); cv.toBlob(function (b) { res(b); }, 'image/png'); });
+  }
+  $('bxOut2').addEventListener('click', function (e) {
+    var i = e.target.dataset.bxpng; if (i === undefined || !bxResult) return;
+    var c = bxResult.charts[+i];
+    bxPngBlob(c).then(function (b) { download(b, bxFileBase() + '_' + safeName(c.title) + '.png'); });
+  });
+  $('bxPngs').addEventListener('click', function () {
+    if (!bxResult) return;
+    var zip = new window.JSZip(), btn = $('bxPngs'), old = btn.textContent; btn.disabled = true; btn.textContent = '產生中…';
+    bxResult.charts.reduce(function (p, c, i) { return p.then(function () { return bxPngBlob(c).then(function (b) { zip.file((i + 1) + '_' + safeName(c.title) + '.png', b); }); }); }, Promise.resolve())
+      .then(function () { return zip.generateAsync({ type: 'blob' }); })
+      .then(function (b) { download(b, bxFileBase() + '_圖片.zip'); })
+      .catch(function (er) { $('bxMsg').innerHTML = '<div class="msg err">圖片產生失敗：' + esc(er.message || er) + '</div>'; })
+      .then(function () { btn.disabled = false; btn.textContent = old; });
+  });
+  $('bxXlsx').addEventListener('click', function () {
+    if (!bxResult) return;
+    var btn = $('bxXlsx'), old = btn.textContent; btn.disabled = true; btn.textContent = '產生中…';
+    var nRows = bxResult.charts.reduce(function (a, c) { return a + c.groups.reduce(function (b, g) { return b + g.rows.length; }, 0); }, 0);
+    $('bxMsg').insertAdjacentHTML('beforeend', '<div class="msg info" id="bxWait">Excel 產生中（共 ' + nRows.toLocaleString() + ' 筆逐時數值' + (nRows > 300000 ? '，資料較多，大約需要 ' + Math.max(10, Math.round(nRows / 25000)) + ' 秒' : '') + '），請稍候…</div>');
+    var r = bxResult.range, cur = Store.current() || {};
+    var info = ['盒鬚圖資料（' + (cur.code ? cur.code + ' ' : '') + (cur.name || '') + '）',
+      '期間：' + r.title + '（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '）',
+      '數值：每台感測器的逐時有效數值（和報表相同：異常值、空白、PM 為 0、PM2.5 大於 PM10、備註時段／疑似異常／手動設為不採用的小時都不列入）。',
+      '噪音：逐時 Leq 依「⑦ 噪音時段設定」的整點歸入日間／晚間／夜間。',
+      '盒鬚圖：盒子為第一四分位數到第三四分位數（四分位數計算方式「包含中位數」，同 Excel QUARTILE.INC），中間線為中位數；鬚延伸到 1.5 倍四分位距內最遠的數值；' + ($('bxOut').checked ? '離群值以圓點表示。' : '不顯示離群值。'),
+      '每個測項工作表：左邊是 Excel 盒鬚圖（需 Excel 2016 以上或 Microsoft 365），右邊是資料（感測器、日期時間、數值）。修改或刪除右邊的數值，圖會跟著更新。',
+      '「統計」工作表列出每台感測器的有效小時數、最小值、四分位數、中位數、最大值、鬚的位置與平均值。',
+      '產生時間：' + new Date().toLocaleString('zh-TW')];
+    BX.buildBoxWorkbook(ExcelJS, window.JSZip, bxResult.charts, info, window.ENV_BOX_STYLE).then(function (buf) {
+      download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), bxFileBase() + '_' + stamp() + '.xlsx');
+    }).catch(function (er) { $('bxMsg').innerHTML = '<div class="msg err">Excel 產生失敗：' + esc(er.message || er) + '</div>'; })
+      .then(function () { btn.disabled = false; btn.textContent = old; if ($('bxWait')) $('bxWait').remove(); });
   });
 })();
