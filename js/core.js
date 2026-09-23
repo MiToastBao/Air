@@ -7,8 +7,8 @@
  *  - 四捨五入一律為「一般四捨五入」到小數 1 位（不採 Access 的銀行家進位）。
  *  - 空品各項：當日有效值算術平均。雨量：當日有效值加總（日累積雨量）。
  *  - 最頻風向：風向角度換算 16 方位文字（每方位 22.5°，北 = 348.75°～11.25°），
- *    只採計同一小時風速有效且 > 0.3 m/s 者，取當日出現次數最多的方位；
- *    若 N 個方位並列最多，N 個方位全部列出（北起順時針，以「、」分隔），文字加「風」，例：「北風、西北風」。
+ *    只採計同一小時風速有效且 ≥ 0.3 m/s 者，取當日出現次數最多的方位；
+ *    若 N 個方位並列最多，N 個方位全部列出（北起順時針，以「、」分隔），只寫方位（不加「風」字），例：「北、西北」。
  *  - 噪音：日 06–20 時、晚 20–22 時、夜 = 同一日曆日的 00–06 時加 22–24 時；
  *    各時段以能量平均：10·log10(平均(10^(L/10)))。
  *  - PM10、PM2.5 測值為 0 也視為異常（沿用 Access 的既有做法，可在設定中關閉）。
@@ -75,20 +75,21 @@
     return Math.floor((d + 11.25) / 22.5) % 16;
   }
 
-  /** 當日最頻風向；同時有 N 個方位並列最多時，N 個方位全部列出（北起順時針，以「、」分隔），例「北風、西北風」 */
+  /** 當日最頻風向；同時有 N 個方位並列最多時，N 個方位全部列出（北起順時針，以「、」分隔），例「北、西北」 */
   function modeDirection(degs) {
     if (!degs.length) return null;
     var cnt = new Array(16).fill(0);
     for (var i = 0; i < degs.length; i++) cnt[dirIndex(degs[i])]++;
     var mx = Math.max.apply(null, cnt);
     var out = [];
-    for (var k = 0; k < 16; k++) if (cnt[k] === mx) out.push(DIR16[k] + '風');
+    for (var k = 0; k < 16; k++) if (cnt[k] === mx) out.push(DIR16[k]);
     return out.join('、');
   }
 
-  var CALM_WS = 0.3; // 風速 <= 0.3 m/s 的那一小時，風向不列入最頻風向
+  var CALM_TEXT = '<0.3'; // 全天靜風時最頻風向欄的文字
+  var CALM_WS = 0.3; // 風速 < 0.3 m/s 的那一小時，風向不列入最頻風向（剛好 0.3 要計入）
 
-  /** 取當日可用於最頻風向的風向值：風向有效，且同一小時風速有效並 > 0.3 */
+  /** 取當日可用於最頻風向的風向值：風向有效，且同一小時風速有效並 ≥ 0.3 */
   function windDirs(rows, hasWS) {
     var out = [];
     for (var i = 0; i < rows.length; i++) {
@@ -96,7 +97,7 @@
       if (wd === null) continue;
       if (hasWS) {
         var ws = validValue(rows[i].v.WS);
-        if (ws === null || !(ws > CALM_WS)) continue;
+        if (ws === null || ws < CALM_WS) continue;
       }
       out.push(wd);
     }
@@ -332,14 +333,20 @@
       WS: vals.WS ? exactMean1(vals.WS) : null,
       WD: vals.WD ? modeDirection(vals.WD) : null,
       RA: vals.RA ? exactSum1(vals.RA) : null,
-      hours: {}, note: ''
+      hours: {}, note: '',
+      fields: AIR_FIELDS.filter(function (f) { return has(f); }) // 這台有的測項（沒有數值時報表寫「－」，沒有這個測項則留白）
     };
     var used = AIR_FIELDS.filter(function (f) { return has(f) && f !== 'WD'; });
     used.forEach(function (f) { rec.hours[f] = vals[f].length; });
     var note = hoursNote(rows.length, used, rec.hours);
     if (has('WD') && rows.length) {
       rec.hours.WD = vals.WD.length;
-      note += '；最頻風向採計' + vals.WD.length + '小時' + (has('WS') ? '（風速>0.3）' : '（無風速欄，全部採計）');
+      note += '；最頻風向採計' + vals.WD.length + '小時' + (has('WS') ? '（風速≥0.3）' : '（無風速欄，全部採計）');
+      // 靜風：有風向、風速都有效的小時，但風速全部 < 0.3 → 最頻風向記為「<0.3」（「－」只代表設備異常或維護沒有測值）
+      if (!vals.WD.length && has('WS')) {
+        var calm = rows.filter(function (r) { return validValue(r.v.WD) !== null && validValue(r.v.WS) !== null; }).length;
+        if (calm) { rec.WD = CALM_TEXT; note += '；全天風速都 < 0.3 m/s（靜風 ' + calm + ' 小時），最頻風向記為「' + CALM_TEXT + '」'; }
+      }
     }
     if (rows.length && rows.length < 24) {
       var hs = {}; rows.forEach(function (r) { hs[hourOf(r.ts)] = true; });

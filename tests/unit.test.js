@@ -53,21 +53,24 @@ test('風向角度 → 16 方位文字', () => {
   for (const [deg, name] of cases) assert.equal(Core.DIR16[Core.dirIndex(deg)], name, deg + '°');
 });
 
-test('最頻風向：只採計風速 > 0.3；並列最多時全部列出', () => {
-  // 北 5 筆、西北 5 筆、南 8 筆但風速都 = 0.3（不採計）
+test('最頻風向：只採計風速 ≥ 0.3（剛好 0.3 要計入，< 0.3 不計）；並列最多時全部列出', () => {
+  // 北 5 筆、西北 5 筆、南 8 筆但風速都 = 0.29（不採計）；另 2 筆 0.3 剛好（採計）
   const rows = [];
   for (let h = 0; h < 5; h++) rows.push({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: 0, WS: 1 } });
   for (let h = 5; h < 10; h++) rows.push({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: 315, WS: 0.31 } });
-  for (let h = 10; h < 18; h++) rows.push({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: 180, WS: 0.3 } });
+  for (let h = 10; h < 18; h++) rows.push({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: 180, WS: 0.29 } });
   rows.push({ ts: '2026-07-01 18:00', v: { WD: 180, WS: null } }); // 風速無效 → 不採計
+  rows.push({ ts: '2026-07-01 19:00', v: { WD: 90, WS: 0.3 } }, { ts: '2026-07-01 20:00', v: { WD: 90, WS: 0.3 } }); // 剛好 0.3 → 採計
   const r = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows }, '2026-07-01').air[0];
-  assert.equal(r.WD, '北風、西北風');
-  assert.match(r.note, /最頻風向採計10小時（風速>0\.3）/);
+  assert.equal(r.WD, '北、西北');
+  assert.match(r.note, /最頻風向採計12小時（風速≥0\.3）/);
+  const r2 = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows: hours('2026-07-01', h => ({ WD: 90, WS: h === 3 ? 0.3 : 0.2 })) }, '2026-07-01').air[0];
+  assert.equal(r2.WD, '東'); // 只有一小時剛好 0.3 → 不是靜風
 });
 
-test('最頻風向：全天風速都 <= 0.3 → 空白', () => {
+test('最頻風向：全天風速都 < 0.3 → 「<0.3」（v1.8.3 起，原本是空白）', () => {
   const s = { id: 'W', name: 'W', fields: ['WD', 'WS'], rows: hours('2026-07-01', () => ({ WD: 90, WS: 0.2 })) };
-  assert.equal(one(s, '2026-07-01').air[0].WD, null);
+  assert.equal(one(s, '2026-07-01').air[0].WD, '<0.3');
 });
 
 test('噪音日晚夜：夜 = 當日 00–06 + 22–24，能量平均', () => {
@@ -215,7 +218,7 @@ test('不採用風速時，該小時的風向也不列入最頻風向', () => {
   const review = {};
   rows.slice(0, 2).forEach(r => { review['W|' + r.ts] = { sig: M.rowSig(r), exclude: ['WS'] }; });
   const s = M.applyExclusions(M.sensorsFromChunks([chunk('W', ['WD', 'WS'], rows)], [], null), review);
-  assert.equal(Core.buildReports(s, { from: '2026-07-01', to: '2026-07-01' }).air[0].WD, '南風');
+  assert.equal(Core.buildReports(s, { from: '2026-07-01', to: '2026-07-01' }).air[0].WD, '南');
 });
 
 test('PM2.5 > PM10 的小時，PM10 與 PM2.5 都不計；相等仍有效；可關閉', () => {
@@ -460,4 +463,33 @@ test('感測器新增與停用：新感測器自動加入並設啟用日；少�
   // 名稱修改不會弄掉停用日
   const pm = M.planMapping({ rows: [{ src: '9000002', rid: '9000002', name: '新名字', line: 0 }], errors: [], warnings: [] }, sen2, ['9000002']);
   assert.equal(pm.ops[0].value.retiredFrom, '2026-08-01');
+});
+
+test('Excel：有這個測項但當日沒有有效數值 → 「－」；沒有這個測項（例如沒有雨量計）→ 留白', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const s = { id: 'A', name: 'A', fields: ['TMP', 'PM10', 'PM25'], rows: hours('2026-07-01', h => ({ TMP: 25, PM10: -9999, PM25: null })) };
+  const air = Core.buildReports([s], { from: '2026-07-01', to: '2026-07-01' }).air;
+  const ws = X.buildAirWorkbook(ExcelJS, air, { includeRain: true }).getWorksheet(1);
+  const v = ws.getRow(2).values.slice(1);
+  assert.deepEqual([v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10]], [25, undefined, '－', '－', undefined, undefined, undefined, undefined]);
+  assert.equal(ws.getRow(2).getCell(6).alignment.horizontal, 'center');
+  const n = Core.buildReports([{ id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-07-01', h => ({ LEQ: h >= 6 && h < 20 ? 60 : -1 })) }], { from: '2026-07-01', to: '2026-07-01' }).noise;
+  const wn = X.buildNoiseWorkbook(ExcelJS, n, {}).getWorksheet(1);
+  assert.deepEqual(wn.getRow(2).values.slice(4, 7), [60, '－', '－']);
+});
+
+test('最頻風向：全天風速都 < 0.3（靜風）→「<0.3」；風向或風速異常沒有測值 →「－」', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const f = ['WD', 'WS'];
+  const calm = { id: 'A', name: 'A', fields: f, rows: hours('2026-07-01', h => ({ WD: 90, WS: h % 2 ? 0.29 : 0.1 })) };
+  const broken = { id: 'B', name: 'B', fields: f, rows: hours('2026-07-01', h => ({ WD: -9999, WS: 0.1 })) };
+  const mixed = { id: 'C', name: 'C', fields: f, rows: hours('2026-07-01', h => ({ WD: 90, WS: h === 5 ? 2 : 0.2 })) };
+  const air = Core.buildReports([calm, broken, mixed], { from: '2026-07-01', to: '2026-07-01' }).air;
+  assert.deepEqual(air.map(r => r.WD), ['<0.3', null, '東']);
+  assert.match(air[0].note, /全天風速都 < 0\.3 m\/s（靜風 24 小時），最頻風向記為「<0\.3」/);
+  assert.doesNotMatch(air[1].note, /靜風/);
+  const ws = X.buildAirWorkbook(ExcelJS, air, {}).getWorksheet(1);
+  assert.deepEqual([2, 3, 4].map(i => ws.getRow(i).getCell(10).value), ['<0.3', '－', '東']);
 });

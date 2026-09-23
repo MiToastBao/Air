@@ -55,6 +55,19 @@
     ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: widths.length } };
   }
 
+  var NA = '－'; // 有這個測項、但當日沒有有效數值（異常值、空白、不採用、當日無資料）
+  /** 有這個測項但沒有數值 → 「－」；這台根本沒有這個測項 → 留白 */
+  function cellOr(r, f, v) {
+    if (v !== null && v !== undefined && v !== '') return v;
+    if (!r.fields || r.fields.indexOf(f) >= 0) return NA;
+    return null;
+  }
+  function centerNA(ws, fromCol, toCol) {
+    ws.eachRow(function (row, rn) {
+      if (rn === 1) return;
+      for (var c = fromCol; c <= toCol; c++) { var cell = row.getCell(c); if (cell.value === NA || cell.value === '<0.3') cell.alignment = { horizontal: 'center' }; }
+    });
+  }
   /** 空氣品質日均報表；includeRain 決定是否加雨量欄 */
   function buildAirWorkbook(ExcelJS, rows, opts) {
     opts = opts || {};
@@ -65,8 +78,8 @@
     head.push('備註');
     ws.addRow(head);
     rows.forEach(function (r) {
-      var line = [r.id, r.name, dateCell(r.date), r.TMP, r.HUM, r.PM10, r.PM25, r.TVOC, r.WS, r.WD];
-      if (opts.includeRain) line.push(r.RA);
+      var line = [r.id, r.name, dateCell(r.date)].concat(['TMP', 'HUM', 'PM10', 'PM25', 'TVOC', 'WS', 'WD'].map(function (f) { return cellOr(r, f, r[f]); }));
+      if (opts.includeRain) line.push(cellOr(r, 'RA', r.RA));
       line.push(r.note);
       ws.addRow(line);
     });
@@ -87,6 +100,7 @@
       });
     });
     wb.overCount = over;
+    centerNA(ws, 4, opts.includeRain ? 11 : 10);
     var widths = [12, 16, 12, 9, 9, 9, 9, 9, 9, 14];
     if (opts.includeRain) widths.push(12);
     widths.push(40);
@@ -99,7 +113,8 @@
     var wb = new ExcelJS.Workbook();
     var ws = wb.addWorksheet('噪音Leq日晚夜');
     ws.addRow(['感測器編號', '感測器名稱', '日期', 'Leq日', 'Leq晚', 'Leq夜', '備註']);
-    rows.forEach(function (r) { ws.addRow([r.id, r.name, dateCell(r.date), r.DAY, r.EVE, r.NIGHT, r.note]); });
+    rows.forEach(function (r) { ws.addRow([r.id, r.name, dateCell(r.date), cellOr(r, 'LEQ', r.DAY), cellOr(r, 'LEQ', r.EVE), cellOr(r, 'LEQ', r.NIGHT), r.note]); });
+    centerNA(ws, 4, 6);
     ws.getColumn(3).numFmt = 'yyyy/mm/dd';
     for (var c = 4; c <= 6; c++) ws.getColumn(c).numFmt = '0.0';
     styleSheet(ws, [12, 16, 12, 9, 9, 9, 44]);
