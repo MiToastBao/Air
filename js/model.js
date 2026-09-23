@@ -18,7 +18,8 @@
    * @param chunks    既有 chunks 陣列
    * @return {ok, errors:[], ops:[], stats:{added, overwritten, changed, unchanged}, months:{YYYY-MM:{sensors:Set}}, newSensors:[]}
    */
-  function planImport(files, chunks, knownSensors) {
+  function planImport(files, chunks, knownSensors, opt) {
+    opt = opt || {};
     var errors = [];
     var byKey = {};
     chunks.forEach(function (c) { byKey[c.key] = c; });
@@ -49,7 +50,8 @@
       });
     });
 
-    var stats = { added: 0, overwritten: 0, changed: 0, unchanged: 0 };
+    var stats = { added: 0, overwritten: 0, changed: 0, unchanged: 0, skipped: 0 };
+    var dupMonths = {}; // YYYY-MM → {dup, changed, sensors:{}}
     var ops = [], months = {};
     Object.keys(incoming).sort().forEach(function (ck) {
       var inc = incoming[ck];
@@ -64,8 +66,12 @@
       Object.keys(inc.rows).forEach(function (ts) {
         var r = inc.rows[ts];
         if (map[ts]) {
+          var same = sameRow(map[ts], r);
+          var dm = dupMonths[inc.month] || (dupMonths[inc.month] = { dup: 0, changed: 0, sensors: {} });
+          dm.dup++; if (!same) dm.changed++; dm.sensors[inc.id] = true;
+          if (opt.skipExisting) { stats.skipped++; return; } // 只匯入新資料：重複的保留原本
           stats.overwritten++;
-          if (sameRow(map[ts], r)) stats.unchanged++; else stats.changed++;
+          if (same) stats.unchanged++; else stats.changed++;
         } else stats.added++;
         map[ts] = r;
       });
@@ -85,7 +91,7 @@
         ops.push({ store: 'sensors', type: 'put', value: keep });
       }
     });
-    return { ok: errors.length === 0, errors: errors, ops: errors.length ? [] : ops, stats: stats, months: months, newSensors: newSensors };
+    return { ok: errors.length === 0, errors: errors, ops: errors.length ? [] : ops, stats: stats, months: months, newSensors: newSensors, dupMonths: dupMonths };
   }
 
   /** 把 chunks 整理成 buildReports 要的感測器清單 */

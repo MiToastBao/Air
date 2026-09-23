@@ -105,3 +105,5 @@ table.rv tr.pending.sel td{background:#f3e6ef}
 .toast{position:fixed;right:16px;bottom:16px;max-width:min(560px,calc(100% - 32px));z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.18);font-size:14px}
 .toast button{margin-left:6px;padding:2px 8px;font-size:13px}
 body.busy-cursor, body.busy-cursor *{cursor:progress !important}
+.dupbox{border:2px solid #d9a441;background:#fff6e0;color:#4a3000;border-radius:8px;padding:10px 14px;margin:8px 0}
+.dupbox ul{margin:4px 0 6px;padding-left:20px}

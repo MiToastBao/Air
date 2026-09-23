@@ -142,11 +142,11 @@ test('兩份檔案有同一感測器同一時間 → 整批擋下', () => {
 test('重複匯入同一個月是覆蓋，並在寫入前算出新增／覆蓋筆數', () => {
   const r1 = P.parseWorkbook([sheet('9000004', ['DateTime', 'TMP ℃'], [[U(2026, 7, 1, 0), 25], [U(2026, 7, 1, 1), 26]])]);
   const p1 = M.planImport([{ fileName: 'a.xlsx', result: r1 }], [], []);
-  assert.deepEqual(p1.stats, { added: 2, overwritten: 0, changed: 0, unchanged: 0 });
+  assert.deepEqual(p1.stats, { added: 2, overwritten: 0, changed: 0, unchanged: 0, skipped: 0 });
   const chunks = p1.ops.filter(o => o.store === 'chunks').map(o => o.value);
   const r2 = P.parseWorkbook([sheet('9000004', ['DateTime', 'TMP ℃'], [[U(2026, 7, 1, 1), 27], [U(2026, 7, 1, 2), 28]])]);
   const p2 = M.planImport([{ fileName: 'b.xlsx', result: r2 }], chunks, [{ id: '9000004', label: '', name: 'x' }]);
-  assert.deepEqual(p2.stats, { added: 1, overwritten: 1, changed: 1, unchanged: 0 });
+  assert.deepEqual(p2.stats, { added: 1, overwritten: 1, changed: 1, unchanged: 0, skipped: 0 });
   const merged = p2.ops.find(o => o.store === 'chunks').value;
   assert.equal(merged.rows.length, 3);
   assert.equal(merged.rows[1].v.TMP, 27);
@@ -345,4 +345,17 @@ test('Excel：PM10、PM2.5 日平均超過標準值（嚴格大於）才粗體�
   assert.equal(wb.overCount, 2);
   const wb2 = X.buildAirWorkbook(ExcelJS, rows, { std: { PM10: 100, PM25: 35 } });
   assert.equal(wb2.overCount, 0);
+});
+
+test('重複匯入：可選擇只匯入新資料，重複的保留原本；並列出各月份重複筆數', () => {
+  const r1 = P.parseWorkbook([sheet('9000004', ['DateTime', 'TMP ℃'], [[U(2026, 7, 1, 0), 25], [U(2026, 7, 1, 1), 26]])]);
+  const chunks = M.planImport([{ fileName: 'a.xlsx', result: r1 }], [], []).ops.filter(o => o.store === 'chunks').map(o => o.value);
+  const r2 = P.parseWorkbook([sheet('9000004', ['DateTime', 'TMP ℃'], [[U(2026, 7, 1, 1), 99], [U(2026, 7, 1, 2), 28]])]);
+  const known = [{ id: '9000004', label: '', name: 'x' }];
+  const over = M.planImport([{ fileName: 'b.xlsx', result: r2 }], chunks, known);
+  assert.deepEqual(over.dupMonths['2026-07'], { dup: 1, changed: 1, sensors: { '9000004': true } });
+  const skip = M.planImport([{ fileName: 'b.xlsx', result: r2 }], chunks, known, { skipExisting: true });
+  assert.deepEqual([skip.stats.added, skip.stats.skipped, skip.stats.overwritten], [1, 1, 0]);
+  const rows = skip.ops.find(o => o.store === 'chunks').value.rows;
+  assert.deepEqual(rows.map(r => r.v.TMP), [25, 26, 28]); // 01 時保留原本的 26
 });

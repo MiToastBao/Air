@@ -254,34 +254,47 @@
       html += '<div class="msg err">沒有可以匯入的檔案。</div>';
     } else {
       var st = plan.stats;
-      html += '<h3>匯入前確認</h3><div class="msg info">將匯入 <b>' + importable + '</b> 份檔案：新增 <b>' + st.added + '</b> 筆、覆蓋既有 <b>' + st.overwritten + '</b> 筆' +
-        (st.overwritten ? '（其中內容不同 <b>' + st.changed + '</b> 筆、完全相同 ' + st.unchanged + ' 筆）' : '') + '。</div>';
-      if (st.changed) html += '<div class="msg warn">有 ' + st.changed + ' 筆會被新檔案的數值取代，請確認這次匯入的是正確（較新）的月報。</div>';
+      var dupN = st.overwritten, dm = plan.dupMonths || {};
+      html += '<h3>匯入前確認</h3><div class="msg info">這次選了 <b>' + importable + '</b> 份檔案：新資料 <b>' + st.added + '</b> 筆' + (dupN ? '、和已匯入的資料重複 <b>' + dupN + '</b> 筆' : '，沒有和已匯入的資料重複') + '。</div>';
+      if (dupN) {
+        html += '<div class="dupbox"><b>⚠ 已有 ' + dupN.toLocaleString() + ' 筆資料重複</b>（同一台感測器、同一個時間已經匯入過）：<ul>' + Object.keys(dm).sort().map(function (m) {
+          return '<li>' + rocMonth(m) + '：' + dm[m].dup.toLocaleString() + ' 筆重複（' + Object.keys(dm[m].sensors).length + ' 台感測器）' +
+            (dm[m].changed ? '，其中 <b>' + dm[m].changed.toLocaleString() + ' 筆數值或備註不同</b>' : '，內容與已匯入的完全相同') + '</li>';
+        }).join('') + '</ul>' +
+          (st.changed ? '覆蓋後，數值不同的那些小時會改用新檔案的數值；如果那些小時之前在「② 備註時段確認」確認過，會變成「月報已更新，請重新確認」。' : '內容完全相同，覆蓋或略過結果都一樣。') +
+          '<br>請選擇：</div>';
+        html += '<div class="row"><button id="confirmImport" class="danger">覆蓋重複的資料並匯入</button>' +
+          (st.added ? '<button id="skipImport" class="primary">只匯入新資料（重複的保留原本）</button>' : '') +
+          '<button id="cancelImport">取消匯入</button></div>';
+      }
       if (plan.newSensors.length) html += '<div class="msg info">新的感測器 ' + plan.newSensors.length + ' 台：' + esc(plan.newSensors.join('、')) + '。編號與名稱可在「⑤ 感測器編號與名稱」修改。</div>';
-      html += '<div class="row"><button id="confirmImport" class="primary">確認匯入</button><button id="cancelImport">取消</button></div>';
+      if (!dupN) html += '<div class="row"><button id="confirmImport" class="primary">確認匯入</button><button id="cancelImport">取消</button></div>';
     }
     html += '</div>';
     $('importPreview').innerHTML = html;
-    if ($('confirmImport')) $('confirmImport').addEventListener('click', doImport);
+    if ($('confirmImport')) $('confirmImport').addEventListener('click', function () { doImport(false); });
+    if ($('skipImport')) $('skipImport').addEventListener('click', function () { doImport(true); });
     if ($('cancelImport')) $('cancelImport').addEventListener('click', function () { state.pending = null; $('importPreview').innerHTML = ''; });
   }
 
-  function doImport() {
+  function doImport(skipExisting) {
     if (state.loadError || !state.pending || !state.pending.plan.ok) return;
-    var btn = $('confirmImport');
-    btn.disabled = true; btn.textContent = '寫入中…';
+    var btn = skipExisting ? $('skipImport') : $('confirmImport'), label = btn.textContent;
+    ['confirmImport', 'skipImport', 'cancelImport'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
+    btn.textContent = '寫入中…';
     // 寫入前以最新資料重新規劃，避免兩個分頁同時操作
     Store.loadAll().then(function (d) {
-      var plan = M.planImport(state.pending.results.filter(function (r) { return r.result; }), d.chunks, d.sensors);
+      var plan = M.planImport(state.pending.results.filter(function (r) { return r.result; }), d.chunks, d.sensors, { skipExisting: skipExisting });
       if (!plan.ok) throw new Error('資料有重複，請重新選擇檔案。');
       return Store.writeBatch(plan.ops).then(function () { return plan; });
     }).then(function (plan) {
       state.pending = null;
       return reload().then(function () { // 先重新載入，再算待確認筆數（否則會算到匯入前的舊資料）
-        $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆、覆蓋 ' + plan.stats.overwritten + ' 筆。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div></div>';
+        $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆' + (skipExisting ? '、略過重複 ' + plan.stats.skipped + ' 筆（保留原本的資料）' : '、覆蓋 ' + plan.stats.overwritten + ' 筆') + '。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div></div>';
       });
     }).catch(function (e) {
-      btn.disabled = false; btn.textContent = '確認匯入';
+      ['confirmImport', 'skipImport', 'cancelImport'].forEach(function (id) { if ($(id)) $(id).disabled = false; });
+      btn.textContent = label;
       $('importPreview').insertAdjacentHTML('beforeend', '<div class="msg err">寫入失敗，這次沒有任何資料被寫入：' + esc(e.message || e) + '</div>');
     });
   }
