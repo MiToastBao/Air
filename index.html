@@ -21,7 +21,7 @@
   <button role="tab" data-tab="review">② 備註時段確認 <span id="reviewBadge" class="badge" hidden></span></button>
   <button role="tab" data-tab="data">③ 已匯入資料</button>
   <button role="tab" data-tab="report">④ 產出報表</button>
-  <button role="tab" data-tab="names">⑤ 感測器名稱</button>
+  <button role="tab" data-tab="names">⑤ 感測器編號與名稱</button>
   <button role="tab" data-tab="backup">⑥ 備份與還原</button>
 </nav>
 
@@ -70,6 +70,24 @@
         <span class="hint" id="rvCount"></span>
       </div>
       <div id="reviewResult"></div>
+    </div>
+    <div class="card">
+      <h2>手動新增不採用時段</h2>
+      <p class="hint">月報沒有寫備註、但您判斷數值有問題的時段，可以在這裡指定感測器、起訖時間與測項，一次設為不採用。起訖時間都包含在內。</p>
+      <div class="row">
+        感測器 <select id="mnSensor"></select>
+      </div>
+      <div class="row">
+        從 <input type="datetime-local" id="mnFrom" step="3600">
+        到 <input type="datetime-local" id="mnTo" step="3600">
+      </div>
+      <div class="row">測項：<span id="mnFields"></span></div>
+      <div class="row">原因 <input type="text" id="mnReason" placeholder="例：PM2.5 高於 PM10，PM 感測器故障" style="width:360px"></div>
+      <div id="mnPreview" class="info" hidden></div>
+      <div class="row"><button id="mnAdd" class="danger" type="button">新增並重新計算</button></div>
+      <div id="mnResult"></div>
+      <h3>已設定的手動不採用時段</h3>
+      <div id="mnList" class="scroll"></div>
     </div>
   </section>
 
@@ -121,6 +139,7 @@
       <label class="opt"><input type="checkbox" id="optRain" checked> 空品報表加上「日累積雨量」欄（只有具雨量的測站會有數值）</label>
       <label class="opt"><input type="checkbox" id="optFill" checked> 期間內整天沒有資料的日子也列出，備註「當日無資料」</label>
       <label class="opt"><input type="checkbox" id="optPmZero" checked> PM10、PM2.5 測值為 0 視為儀器異常、不列入計算（與原 Access 相同）</label>
+      <label class="opt"><input type="checkbox" id="optPmRatio" checked> 同一小時 PM2.5 大於 PM10 時，PM10 與 PM2.5 都視為異常、不列入計算</label>
 
       <div id="rangeInfo" class="info"></div>
       <div class="row">
@@ -132,7 +151,7 @@
     <div class="card">
       <h3>計算方式（重點）</h3>
       <ul class="rules">
-        <li>負值（-9999 等）、空白、文字＝儀器異常，不計入、也不當 0。</li>
+        <li>負值（-9999 等）、空白、文字＝儀器異常，不計入、也不當 0。PM 為 0、PM2.5 大於 PM10 也不計（可在上方選項關閉）。</li>
         <li>空品：當日有效值平均，一般四捨五入到小數 1 位；雨量為當日加總。</li>
         <li>最頻風向：角度換算 16 方位，只採計風速 &gt; 0.3 m/s 的小時，取當日出現次數最多者；並列最多時全部列出（例：「南風、西南風」）。</li>
         <li>噪音：日 06–20、晚 20–22、夜＝當日 00–06 加 22–24，能量平均。</li>
@@ -146,14 +165,18 @@
   <!-- ⑤ 名稱 -->
   <section id="tab-names" class="panel" hidden>
     <div class="card">
-      <h2>感測器名稱</h2>
-      <p class="hint">報表「感測器名稱」欄使用這裡的名稱。第一次匯入時會先用月報表頭文字，可直接修改。</p>
+      <h2>感測器編號與名稱</h2>
+      <p class="hint">報表的「感測器編號」「感測器名稱」欄使用這裡的設定。「月報感測器編號」是月報工作表上的編號，不能改；「報表感測器編號」空白或相同時，報表就用月報編號。修改後下載的報表會自動套用，不需要重新匯入月報。</p>
+      <h3>用檔案匯入</h3>
       <div class="row">
-        <label class="btnlike">從舊報表帶入名稱<input type="file" id="nameFile" accept=".xlsx" hidden></label>
-        <span class="hint">（選一份以前匯出的報表，讀取「感測器編號」「感測器名稱」兩欄）</span>
+        <button id="mapTpl" type="button">下載範本（含目前設定）</button>
+        <label class="btnlike primary">匯入對照表<input type="file" id="mapFile" accept=".xlsx" hidden></label>
       </div>
+      <p class="hint">可匯入本系統範本、您自己的對照表（有「感測器編號」「感測器名稱」欄即可），或以前匯出的空品／噪音報表。匯入後會先列出要修改的內容，按「確認套用」才會生效。</p>
+      <div id="mapPreview"></div>
+      <h3>直接修改</h3>
       <div id="names" class="scroll"></div>
-      <div class="row"><button id="saveNames" class="primary">儲存名稱</button><span id="namesMsg"></span></div>
+      <div class="row"><button id="saveNames" class="primary">儲存</button><span id="namesMsg"></span></div>
     </div>
   </section>
 

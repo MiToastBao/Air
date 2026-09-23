@@ -217,3 +217,65 @@ test('不採用風速時，該小時的風向也不列入最頻風向', () => {
   const s = M.applyExclusions(M.sensorsFromChunks([chunk('W', ['WD', 'WS'], rows)], [], null), review);
   assert.equal(Core.buildReports(s, { from: '2026-07-01', to: '2026-07-01' }).air[0].WD, '南風');
 });
+
+test('PM2.5 > PM10 的小時，PM10 與 PM2.5 都不計；相等仍有效；可關閉', () => {
+  const rows = hours('2026-07-01', h => h < 4 ? { PM10: 1.0, PM25: 1.6, TMP: 25 } : h === 4 ? { PM10: 8, PM25: 8, TMP: 25 } : { PM10: 20, PM25: 10, TMP: 25 });
+  const s = { id: 'P', name: 'P', fields: ['PM10', 'PM25', 'TMP'], rows };
+  const r = one(s, '2026-07-01').air[0];
+  assert.equal(r.PM10, Core.exactMean1([8].concat(Array(19).fill(20))));
+  assert.equal(r.PM25, Core.exactMean1([8].concat(Array(19).fill(10))));
+  assert.equal(r.TMP, 25);
+  assert.match(r.note, /PM10 20、PM2\.5 20/);
+  assert.match(r.note, /PM2\.5大於PM10不計：4小時/);
+  const off = Core.buildReports([s], { from: '2026-07-01', to: '2026-07-01' }, { pmRatioInvalid: false }).air[0];
+  assert.equal(off.PM25, Core.exactMean1([1.6, 1.6, 1.6, 1.6, 8].concat(Array(19).fill(10))));
+  assert.doesNotMatch(off.note, /大於/);
+});
+
+test('PM10 為 0（已無效）時不拿來跟 PM2.5 比，PM2.5 照常計算', () => {
+  const s = { id: 'P', name: 'P', fields: ['PM10', 'PM25'], rows: hours('2026-07-01', () => ({ PM10: 0, PM25: 3 })) };
+  const r = one(s, '2026-07-01').air[0];
+  assert.equal(r.PM10, null); assert.equal(r.PM25, 3);
+});
+
+test('手動不採用時段：範圍內（含起訖）指定測項不計，其他測項照常；備註寫出', () => {
+  const rows = hours('2026-07-27', h => ({ PM10: 30, PM25: 10, TMP: 25 }));
+  const s = [{ id: 'P', name: 'P', fields: ['PM10', 'PM25', 'TMP'], rows }];
+  const man = [{ uid: 'a', id: 'P', from: '2026-07-27 06:00', to: '2026-07-27 11:00', fields: ['PM10', 'PM25'] }];
+  const r = Core.buildReports(M.applyManual(s, man), { from: '2026-07-27', to: '2026-07-27' }).air[0];
+  assert.equal(r.hours.PM10, 18); assert.equal(r.hours.TMP, 24);
+  assert.match(r.note, /手動不採用：PM10 6、PM2\.5 6小時/);
+  const other = M.applyManual(s, [{ uid: 'b', id: 'Q', from: '2026-07-27 00:00', to: '2026-07-27 23:00', fields: ['PM10'] }]);
+  assert.equal(Core.buildReports(other, { from: '2026-07-27', to: '2026-07-27' }).air[0].hours.PM10, 24);
+  const imp = M.manualImpact([{ key: 'P|2026-07', id: 'P', month: '2026-07', fields: ['PM10', 'PM25', 'TMP'], rows }], man[0]);
+  assert.deepEqual(imp, { hours: 6, cells: 12, days: ['2026-07-27'] });
+});
+
+// ---------- 感測器編號／名稱對照 ----------
+test('對照表：本系統範本三欄、使用者兩欄、舊報表重複列都讀得到', () => {
+  const tpl = M.parseMapping([{ name: 'a', rows: [['月報感測器編號', '報表感測器編號', '感測器名稱'], [9000001, 'A-01', '一號'], ['9000002', '', '二號']] }]);
+  assert.deepEqual(tpl.rows.map(r => [r.src, r.rid, r.name]), [['9000001', 'A-01', '一號'], ['9000002', '9000002', '二號']]);
+  const two = M.parseMapping([{ name: 'b', rows: [['感測器編號', '感測器中文名稱'], [9000001, '感測器1(含風速風向)']] }]);
+  assert.deepEqual(two.rows.map(r => [r.src, r.rid, r.name]), [['9000001', '9000001', '感測器1(含風速風向)']]);
+  const rep = M.parseMapping([{ name: 'c', rows: [['感測器編號', '感測器名稱', '日期'], ['9000001', 'X', 1], ['9000001', 'X', 2]] }]);
+  assert.equal(rep.rows.length, 1); assert.equal(rep.errors.length, 0);
+  const bad = M.parseMapping([{ name: 'd', rows: [['感測器編號', '感測器名稱'], ['9000001', 'X'], ['9000001', 'Y']] }]);
+  assert.equal(bad.errors.length, 1);
+  assert.equal(M.parseMapping([{ name: 'e', rows: [['a', 'b']] }]).errors.length, 1);
+});
+
+test('對照表套用：列出變更、報表編號撞號會擋下、名稱空白維持原名', () => {
+  const cur = [{ id: '9000001', label: 'L1', name: '舊一' }, { id: '9000002', label: 'L2', name: '舊二' }];
+  const p1 = M.planMapping(M.parseMapping([{ name: 'a', rows: [['月報感測器編號', '報表感測器編號', '感測器名稱'], ['9000001', 'A-01', '新一'], ['9000002', '', '']] }]), cur, ['9000001', '9000002']);
+  assert.equal(p1.ok, true); assert.equal(p1.changes.length, 1); assert.equal(p1.same, 1);
+  assert.deepEqual(p1.ops[0].value, { id: '9000001', label: 'L1', name: '新一', reportId: 'A-01' });
+  const p2 = M.planMapping(M.parseMapping([{ name: 'a', rows: [['月報感測器編號', '報表感測器編號', '感測器名稱'], ['9000001', '9000002', '新一']] }]), cur, ['9000001', '9000002']);
+  assert.equal(p2.ok, false); assert.equal(p2.ops.length, 0);
+});
+
+test('匯入新月份時保留使用者設定的報表編號與名稱', () => {
+  const r = P.parseWorkbook([{ name: '9000001', rows: [['DateTime', 'TMP ℃', '表頭新文字 9000001'], [U(2026, 8, 1, 0), 25]] }]);
+  const plan = M.planImport([{ fileName: 'a.xlsx', result: r }], [], [{ id: '9000001', label: '舊表頭', name: '我的名稱', reportId: 'A-01' }]);
+  const op = plan.ops.find(o => o.store === 'sensors');
+  assert.deepEqual(op.value, { id: '9000001', label: '表頭新文字 9000001', name: '我的名稱', reportId: 'A-01' });
+});

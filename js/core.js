@@ -12,6 +12,7 @@
  *  - 噪音：日 06–20 時、晚 20–22 時、夜 = 同一日曆日的 00–06 時加 22–24 時；
  *    各時段以能量平均：10·log10(平均(10^(L/10)))。
  *  - PM10、PM2.5 測值為 0 也視為異常（沿用 Access 的既有做法，可在設定中關閉）。
+ *  - 同一小時 PM2.5 > PM10（常識性錯誤）：PM10、PM2.5 兩者都不計（可在設定中關閉）。
  *  - 不設最低有效時數門檻，改以備註欄提醒有效資料時數。
  */
 (function (root) {
@@ -153,6 +154,7 @@
     opts = opts || {};
     var fill = opts.fillMissingDays !== false;
     var zeroInvalid = opts.zeroInvalid || ZERO_INVALID;
+    var pmRatio = opts.pmRatioInvalid !== false; // 預設開啟：PM2.5 > PM10 的小時兩者都不計
     var air = [], noise = [];
     var sorted = sensors.slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
     sorted.forEach(function (s) {
@@ -176,7 +178,7 @@
       }
       list.forEach(function (d) {
         var rows = byDay[d] || [];
-        if (hasAir) air.push(airDay(s, fields, d, rows, zeroInvalid));
+        if (hasAir) air.push(airDay(s, fields, d, rows, zeroInvalid, pmRatio));
         if (hasNoise) noise.push(noiseDay(s, d, rows));
       });
     });
@@ -210,21 +212,52 @@
   }
 
   /** 使用者確認「不採用」的欄位小時數 */
-  function exclNote(rows, only) {
+  function exclNote(rows, only, key, label) {
+    key = key || 'xf'; label = label || '確認不採用';
     var c = {}, order = [];
     rows.forEach(function (r) {
-      (r.xf || []).forEach(function (f) {
+      (r[key] || []).forEach(function (f) {
         if (only && only.indexOf(f) < 0) return;
         if (!c[f]) { c[f] = 0; order.push(f); }
         c[f]++;
       });
     });
     if (!order.length) return '';
-    return '；確認不採用：' + order.map(function (f) { return FIELD_LABEL[f] + ' ' + c[f]; }).join('、') + '小時';
+    return '；' + label + '：' + order.map(function (f) { return FIELD_LABEL[f] + ' ' + c[f]; }).join('、') + '小時';
   }
 
-  function airDay(s, fields, d, rows, zeroInvalid) {
+  /**
+   * PM2.5 不可能大於 PM10（PM2.5 是 PM10 的一部分）。同一小時兩者都有效、且 PM2.5 > PM10 時，
+   * 無法判斷是哪一個測錯，兩者都視為異常不計。PM2.5 等於 PM10 仍算有效。
+   * 已被判為無效的（負值、空白、PM 為 0、使用者確認不採用）不參與比較。
+   */
+  function pmRatioClean(rows, zeroInvalid) {
+    var n = 0;
+    var out = rows.map(function (r) {
+      var a = validValue(r.v.PM10), b = validValue(r.v.PM25);
+      if (a === 0 && zeroInvalid.indexOf('PM10') >= 0) a = null;
+      if (b === 0 && zeroInvalid.indexOf('PM25') >= 0) b = null;
+      if (a === null || b === null || !(b > a)) return r;
+      n++;
+      var v = {}; Object.keys(r.v).forEach(function (k) { v[k] = r.v[k]; });
+      v.PM10 = null; v.PM25 = null;
+      var o = { ts: r.ts, v: v, pmBad: true };
+      if (r.note) o.note = r.note;
+      if (r.xf) o.xf = r.xf;
+      if (r.mf) o.mf = r.mf;
+      return o;
+    });
+    return { rows: out, n: n };
+  }
+
+  function airDay(s, fields, d, rows, zeroInvalid, pmRatio) {
     var has = function (f) { return fields.indexOf(f) >= 0; };
+    var pmNote = '';
+    if (pmRatio && has('PM10') && has('PM25')) {
+      var pc = pmRatioClean(rows, zeroInvalid);
+      rows = pc.rows;
+      if (pc.n) pmNote = '；PM2.5大於PM10不計：' + pc.n + '小時';
+    }
     var vals = {};
     AIR_FIELDS.forEach(function (f) { vals[f] = has(f) ? collect(rows, f, zeroInvalid) : null; });
     if (has('WD')) vals.WD = windDirs(rows, has('WS'));
@@ -247,7 +280,7 @@
       rec.hours.WD = vals.WD.length;
       note += '；最頻風向採計' + vals.WD.length + '小時' + (has('WS') ? '（風速>0.3）' : '（無風速欄，全部採計）');
     }
-    rec.note = note + exclNote(rows, AIR_FIELDS) + rawNotes(rows);
+    rec.note = note + pmNote + exclNote(rows, AIR_FIELDS) + exclNote(rows, AIR_FIELDS, 'mf', '手動不採用') + rawNotes(rows);
     return rec;
   }
 
@@ -274,7 +307,7 @@
       id: s.id, name: s.name, date: d,
       DAY: energyMean1(p.DAY), EVE: energyMean1(p.EVE), NIGHT: energyMean1(p.NIGHT),
       hours: { DAY: p.DAY.length, EVE: p.EVE.length, NIGHT: p.NIGHT.length },
-      note: note + exclNote(rows, ['LEQ']) + rawNotes(rows)
+      note: note + exclNote(rows, ['LEQ']) + exclNote(rows, ['LEQ'], 'mf', '手動不採用') + rawNotes(rows)
     };
   }
 
@@ -283,7 +316,7 @@
     validValue: validValue, roundHalfUp1: roundHalfUp1, exactMean1: exactMean1, exactSum1: exactSum1,
     dirIndex: dirIndex, modeDirection: modeDirection, energyMean1: energyMean1, noisePeriod: noisePeriod,
     quarterRange: quarterRange, toRoc: toRoc, addDays: addDays, daysBetween: daysBetween,
-    buildReports: buildReports, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs
+    buildReports: buildReports, pmRatioClean: pmRatioClean, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs
   };
   root.EnvCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

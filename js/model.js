@@ -80,7 +80,9 @@
         newSensors.push(id);
         ops.push({ store: 'sensors', type: 'put', value: { id: id, label: s.label, name: s.defaultName || id } });
       } else if (s.label && known[id].label !== s.label) {
-        ops.push({ store: 'sensors', type: 'put', value: { id: id, label: s.label, name: known[id].name } });
+        var keep = { id: id, label: s.label, name: known[id].name };
+        if (known[id].reportId) keep.reportId = known[id].reportId;
+        ops.push({ store: 'sensors', type: 'put', value: keep });
       }
     });
     return { ok: errors.length === 0, errors: errors, ops: errors.length ? [] : ops, stats: stats, months: months, newSensors: newSensors };
@@ -175,7 +177,124 @@
     });
   }
 
-  var api = { rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
+  /**
+   * 手動不採用時段：[{uid, id, from:'YYYY-MM-DD HH:MM', to, fields:[...], reason}]，起訖都包含。
+   * 範圍內該感測器的指定測項設為無效，記在 r.mf，備註欄寫「手動不採用」。
+   */
+  function applyManual(sensors, list) {
+    if (!list || !list.length) return sensors;
+    return sensors.map(function (s) {
+      var mine = list.filter(function (m) { return m.id === s.id; });
+      if (!mine.length) return s;
+      var rows = s.rows.map(function (r) {
+        var hit = mine.filter(function (m) { return r.ts >= m.from && r.ts <= m.to; });
+        if (!hit.length) return r;
+        var v = {}; Object.keys(r.v).forEach(function (k) { v[k] = r.v[k]; });
+        var mf = [];
+        hit.forEach(function (m) { m.fields.forEach(function (f) { if (v[f] !== null && v[f] !== undefined) { v[f] = null; mf.push(f); } }); });
+        if (!mf.length) return r;
+        var o = { ts: r.ts, v: v, mf: mf };
+        if (r.note) o.note = r.note;
+        if (r.xf) o.xf = r.xf;
+        return o;
+      });
+      return { id: s.id, name: s.name, fields: s.fields, rows: rows };
+    });
+  }
+
+  /** 手動時段會影響多少小時、幾個有效數值 */
+  function manualImpact(chunks, m) {
+    var hours = 0, cells = 0, days = {};
+    chunks.forEach(function (c) {
+      if (c.id !== m.id) return;
+      c.rows.forEach(function (r) {
+        if (r.ts < m.from || r.ts > m.to) return;
+        hours++; days[r.ts.slice(0, 10)] = true;
+        m.fields.forEach(function (f) { if (r.v[f] !== null && r.v[f] !== undefined) cells++; });
+      });
+    });
+    return { hours: hours, cells: cells, days: Object.keys(days).sort() };
+  }
+
+  // ---------- 感測器編號／名稱對照表 ----------
+  function idText(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(v);
+    return String(v).trim();
+  }
+  /**
+   * 讀對照表（本系統範本、使用者自己的表、或以前匯出的報表都可以）。
+   * 欄位依表頭文字判斷：「月報…編號／原…編號」＝月報裡的編號；「報表…編號／修正…編號／新…編號」＝報表要顯示的編號；
+   * 含「名稱」＝感測器名稱。只有一個編號欄時，報表編號＝月報編號。
+   */
+  function parseMapping(sheets) {
+    var errors = [], warnings = [], map = {}, order = [];
+    var found = false;
+    sheets.forEach(function (sh) {
+      if (found) return;
+      for (var r = 0; r < Math.min(10, sh.rows.length); r++) {
+        var row = (sh.rows[r] || []).map(function (x) { return x === null || x === undefined ? '' : String(x).trim(); });
+        var idCols = [], nameCol = -1;
+        row.forEach(function (t, i) { if (/編號/.test(t)) idCols.push(i); else if (/名稱/.test(t) && nameCol < 0) nameCol = i; });
+        if (!idCols.length || nameCol < 0) continue;
+        found = true;
+        var src = idCols[0], rid = -1;
+        idCols.forEach(function (i) {
+          if (/報表|修正|新/.test(row[i])) rid = i;
+          else if (/月報|原/.test(row[i])) src = i;
+        });
+        if (rid === src) rid = -1;
+        if (rid < 0 && idCols.length > 1) rid = idCols.filter(function (i) { return i !== src; })[0];
+        for (var k = r + 1; k < sh.rows.length; k++) {
+          var line = sh.rows[k] || [];
+          var a = idText(line[src]); if (!a) continue;
+          var b = rid >= 0 ? idText(line[rid]) : ''; if (!b) b = a;
+          var n = idText(line[nameCol]);
+          if (!n) { warnings.push('第 ' + (k + 1) + ' 列（' + a + '）名稱是空白，名稱維持不變。'); }
+          if (map[a]) {
+            if (map[a].rid !== b || (n && map[a].name && map[a].name !== n)) {
+              errors.push('月報編號 ' + a + ' 出現多次且內容不同（第 ' + map[a].line + ' 列與第 ' + (k + 1) + ' 列），請只保留一列。');
+            }
+            continue; // 完全相同的重複列（例如舊報表每天一列）直接略過
+          }
+          map[a] = { src: a, rid: b, name: n, line: k + 1 }; order.push(a);
+        }
+        break;
+      }
+    });
+    if (!found) errors.push('找不到表頭。第一列（前 10 列內）要有「感測器編號」與「感測器名稱」欄位，建議用「下載範本」的格式。');
+    return { rows: order.map(function (a) { return map[a]; }), errors: errors, warnings: warnings };
+  }
+
+  /** 對照表套用前的比對：哪些編號／名稱會改、報表編號有沒有撞號 */
+  function planMapping(parsed, sensors, dataIds) {
+    var cur = {}; sensors.forEach(function (s) { cur[s.id] = s; });
+    var has = {}; (dataIds || []).forEach(function (id) { has[id] = true; });
+    var changes = [], same = 0, noData = [], ops = [], errors = parsed.errors.slice();
+    var finalRid = {};
+    Object.keys(cur).forEach(function (id) { finalRid[id] = cur[id].reportId || id; });
+    (dataIds || []).forEach(function (id) { if (!finalRid[id]) finalRid[id] = id; });
+    parsed.rows.forEach(function (r) {
+      var c = cur[r.src] || { id: r.src, label: '', name: r.src };
+      var oldRid = c.reportId || r.src, oldName = c.name;
+      var name = r.name || oldName;
+      finalRid[r.src] = r.rid;
+      if (!has[r.src]) noData.push(r.src);
+      if (oldRid === r.rid && oldName === name) { same++; return; }
+      changes.push({ src: r.src, oldRid: oldRid, rid: r.rid, oldName: oldName, name: name });
+      var v = { id: r.src, label: c.label || '', name: name };
+      if (r.rid !== r.src) v.reportId = r.rid;
+      ops.push({ store: 'sensors', type: 'put', value: v });
+    });
+    var byRid = {};
+    Object.keys(finalRid).forEach(function (id) { (byRid[finalRid[id]] = byRid[finalRid[id]] || []).push(id); });
+    Object.keys(byRid).forEach(function (rid) {
+      if (byRid[rid].length > 1) errors.push('報表編號 ' + rid + ' 會同時對應到月報編號 ' + byRid[rid].join('、') + '，報表上會分不出來。請修正後再匯入。');
+    });
+    return { ok: !errors.length, errors: errors, warnings: parsed.warnings, changes: changes, same: same, noData: noData, ops: errors.length ? [] : ops };
+  }
+
+  var api = { parseMapping: parseMapping, planMapping: planMapping, applyManual: applyManual, manualImpact: manualImpact, rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
   root.EnvModel = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

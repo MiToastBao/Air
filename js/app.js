@@ -23,7 +23,7 @@
       if (b.dataset.tab === 'data') renderCoverage();
       if (b.dataset.tab === 'report') updateRangeInfo();
       if (b.dataset.tab === 'names') renderNames();
-      if (b.dataset.tab === 'review') renderReview();
+      if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); }
     });
   });
 
@@ -37,7 +37,7 @@
     lockWrites();
   }
   function lockWrites() {
-    ['fileInput', 'delBtn', 'saveNames', 'restoreFile', 'delYes'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
+    ['fileInput', 'delBtn', 'saveNames', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
   }
 
   function reload() {
@@ -45,7 +45,7 @@
       state.chunks = d.chunks; state.sensors = d.sensors;
       state.meta = {}; d.meta.forEach(function (m) { state.meta[m.key] = m.value; });
       applySettings();
-      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters();
+      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters(); fillManualForm();
     });
   }
 
@@ -182,7 +182,7 @@
       html += '<h3>匯入前確認</h3><div class="msg info">將匯入 <b>' + importable + '</b> 份檔案：新增 <b>' + st.added + '</b> 筆、覆蓋既有 <b>' + st.overwritten + '</b> 筆' +
         (st.overwritten ? '（其中內容不同 <b>' + st.changed + '</b> 筆、完全相同 ' + st.unchanged + ' 筆）' : '') + '。</div>';
       if (st.changed) html += '<div class="msg warn">有 ' + st.changed + ' 筆會被新檔案的數值取代，請確認這次匯入的是正確（較新）的月報。</div>';
-      if (plan.newSensors.length) html += '<div class="msg info">新的感測器 ' + plan.newSensors.length + ' 台：' + esc(plan.newSensors.join('、')) + '。名稱可在「⑤ 感測器名稱」修改。</div>';
+      if (plan.newSensors.length) html += '<div class="msg info">新的感測器 ' + plan.newSensors.length + ' 台：' + esc(plan.newSensors.join('、')) + '。編號與名稱可在「⑤ 感測器編號與名稱」修改。</div>';
       html += '<div class="row"><button id="confirmImport" class="primary">確認匯入</button><button id="cancelImport">取消</button></div>';
     }
     html += '</div>';
@@ -202,8 +202,9 @@
       return Store.writeBatch(plan.ops).then(function () { return plan; });
     }).then(function (plan) {
       state.pending = null;
-      $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆、覆蓋 ' + plan.stats.overwritten + ' 筆。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div></div>';
-      return reload();
+      return reload().then(function () { // 先重新載入，再算待確認筆數（否則會算到匯入前的舊資料）
+        $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆、覆蓋 ' + plan.stats.overwritten + ' 筆。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div></div>';
+      });
     }).catch(function (e) {
       btn.disabled = false; btn.textContent = '確認匯入';
       $('importPreview').insertAdjacentHTML('beforeend', '<div class="msg err">寫入失敗，這次沒有任何資料被寫入：' + esc(e.message || e) + '</div>');
@@ -274,7 +275,7 @@
     });
   });
   ['qYear', 'qNum', 'mFrom', 'mTo', 'dFrom', 'dTo'].forEach(function (id) { $(id).addEventListener('change', updateRangeInfo); $(id).addEventListener('input', updateRangeInfo); });
-  ['optRain', 'optFill', 'optPmZero'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
+  ['optRain', 'optFill', 'optPmZero', 'optPmRatio'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
 
   function currentRange() {
     var md = mode();
@@ -339,13 +340,14 @@
     var old = btn.textContent;
     btn.disabled = true; btn.textContent = '產生中…';
     paint().then(function () {
-      var sensors = M.applyExclusions(M.sensorsFromChunks(state.chunks, state.sensors, r), review());
+      var sensors = applyAll(M.sensorsFromChunks(state.chunks, state.sensors, r), review(), manual());
       var rep = Core.buildReports(sensors, r, {
         fillMissingDays: $('optFill').checked,
         importedMonths: allMonths(),
-        zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : []
+        zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked
       });
-      var rows = kind === 'air' ? rep.air : rep.noise;
+      var rows = (kind === 'air' ? rep.air : rep.noise).map(function (x) { x.id = reportId(x.id); return x; });
+      rows.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
       if (!rows.length) throw new Error(kind === 'air' ? '這個期間沒有空品資料。' : '這個期間沒有噪音資料。');
       var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked }) : X.buildNoiseWorkbook(ExcelJS, rows);
       return wb.xlsx.writeBuffer().then(function (buf) {
@@ -376,74 +378,131 @@
     if (typeof s.rain === 'boolean') $('optRain').checked = s.rain;
     if (typeof s.fill === 'boolean') $('optFill').checked = s.fill;
     if (typeof s.pmZero === 'boolean') $('optPmZero').checked = s.pmZero;
+    if (typeof s.pmRatio === 'boolean') $('optPmRatio').checked = s.pmRatio;
   }
   function saveSettings() {
     if (state.loadError) return;
-    var v = { rain: $('optRain').checked, fill: $('optFill').checked, pmZero: $('optPmZero').checked };
+    var v = { rain: $('optRain').checked, fill: $('optFill').checked, pmZero: $('optPmZero').checked, pmRatio: $('optPmRatio').checked };
     state.meta.settings = v;
     Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).catch(function () {});
   }
 
   // ---------------- ④ 名稱 ----------------
-  function renderNames() {
+  function allSensorMeta() {
     var ids = {};
     state.sensors.forEach(function (s) { ids[s.id] = s; });
     state.chunks.forEach(function (c) { if (!ids[c.id]) ids[c.id] = { id: c.id, label: '', name: c.id }; });
-    var list = Object.keys(ids).sort();
+    return Object.keys(ids).sort().map(function (id) { return ids[id]; });
+  }
+  function reportId(id) {
+    var s = state.sensors.find(function (x) { return x.id === id; });
+    return s && s.reportId ? s.reportId : id;
+  }
+  function dataIds() { var o = {}; state.chunks.forEach(function (c) { o[c.id] = true; }); return Object.keys(o); }
+  function renderNames() {
+    var list = allSensorMeta();
     if (!list.length) { $('names').innerHTML = '<p class="hint">尚未匯入任何資料。</p>'; return; }
-    $('names').innerHTML = '<table><tr><th>感測器編號</th><th class="l">月報表頭文字</th><th class="l">報表使用的名稱</th></tr>' +
-      list.map(function (id) {
-        var s = ids[id];
-        return '<tr><td>' + esc(id) + '</td><td class="l">' + esc(s.label) + '</td><td class="l"><input type="text" class="namein" data-id="' + esc(id) + '" value="' + esc(s.name) + '"></td></tr>';
+    $('names').innerHTML = '<table><tr><th>月報感測器編號</th><th class="l">月報表頭文字</th><th class="l">報表感測器編號</th><th class="l">報表感測器名稱</th></tr>' +
+      list.map(function (s) {
+        return '<tr><td>' + esc(s.id) + '</td><td class="l">' + esc(s.label) + '</td><td class="l"><input type="text" class="ridin" data-id="' + esc(s.id) + '" value="' + esc(s.reportId || s.id) + '" style="width:110px"></td>' +
+          '<td class="l"><input type="text" class="namein" data-id="' + esc(s.id) + '" value="' + esc(s.name) + '"></td></tr>';
       }).join('') + '</table>';
   }
   $('saveNames').addEventListener('click', function () {
     if (state.loadError) return;
-    var byId = {};
-    state.sensors.forEach(function (s) { byId[s.id] = s; });
-    var ops = [], empty = [];
+    var rows = [];
+    var empty = [];
     document.querySelectorAll('.namein').forEach(function (inp) {
       var id = inp.dataset.id, name = inp.value.trim();
-      if (!name) { empty.push(id); return; }
-      var s = byId[id] || { id: id, label: '' };
-      ops.push({ store: 'sensors', type: 'put', value: { id: id, label: s.label, name: name } });
+      var rid = document.querySelector('.ridin[data-id="' + id + '"]').value.trim() || id;
+      if (!name) empty.push(id);
+      rows.push({ src: id, rid: rid, name: name, line: 0 });
     });
     if (empty.length) { $('namesMsg').innerHTML = '<span class="msg err">名稱不可空白：' + esc(empty.join('、')) + '</span>'; return; }
-    Store.writeBatch(ops).then(function () { $('namesMsg').innerHTML = '<span class="msg ok">已儲存 ' + ops.length + ' 個名稱。</span>'; return reload(); })
+    var plan = M.planMapping({ rows: rows, errors: [], warnings: [] }, state.sensors, dataIds());
+    if (!plan.ok) { $('namesMsg').innerHTML = '<span class="msg err">' + plan.errors.map(esc).join('<br>') + '</span>'; return; }
+    if (!plan.ops.length) { $('namesMsg').innerHTML = '<span class="msg info">沒有任何變更。</span>'; return; }
+    Store.writeBatch(plan.ops).then(reload).then(function () { renderNames(); $('namesMsg').innerHTML = '<span class="msg ok">已儲存 ' + plan.ops.length + ' 台感測器的設定，之後下載的報表會使用新的編號與名稱。</span>'; })
       .catch(function (e) { $('namesMsg').innerHTML = '<span class="msg err">儲存失敗：' + esc(e.message || e) + '</span>'; });
   });
-  $('nameFile').addEventListener('change', function (e) {
+  $('mapTpl').addEventListener('click', function () {
+    reload().then(buildTemplate).catch(function (e) { $('mapPreview').innerHTML = '<div class="msg err">範本產生失敗：' + esc(e.message || e) + '</div>'; });
+  });
+  function buildTemplate() {
+    var wb = new ExcelJS.Workbook();
+    var ws = wb.addWorksheet('感測器對照');
+    ws.addRow(['月報感測器編號', '報表感測器編號', '感測器名稱', '月報表頭文字（參考，不會匯入）']);
+    allSensorMeta().forEach(function (s) { ws.addRow([s.id, s.reportId || s.id, s.name, s.label || '']); });
+    [16, 16, 28, 36].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    ws.getRow(1).font = { bold: true };
+    ws.getColumn(1).numFmt = '@'; ws.getColumn(2).numFmt = '@';
+    var note = wb.addWorksheet('說明');
+    ['填寫說明',
+     '1. 「月報感測器編號」：月報工作表上的編號，用來找到是哪一台，請不要改。',
+     '2. 「報表感測器編號」：報表上要顯示的編號。和月報編號一樣就不用改；留空白也視為相同。',
+     '3. 「感測器名稱」：報表上要顯示的名稱。留空白＝維持目前名稱。',
+     '4. 可以新增還沒有資料的感測器（先記下，之後匯入月報時就會使用）。',
+     '5. 同一個報表編號不可以對應到兩台感測器。',
+     '6. 存檔後到「⑤ 感測器編號與名稱」按「匯入對照表」，確認內容後按「確認套用」。'].forEach(function (t) { note.addRow([t]); });
+    note.getColumn(1).width = 90; note.getRow(1).font = { bold: true };
+    wb.xlsx.writeBuffer().then(function (buf) {
+      download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), '感測器編號對照範本_' + stamp() + '.xlsx');
+    });
+  }
+  var mapPending = null;
+  $('mapFile').addEventListener('change', function (e) {
     var f = e.target.files[0]; e.target.value = '';
     if (!f) return;
+    mapPending = null;
+    $('mapPreview').innerHTML = '<div class="msg info">讀取中…</div>';
     f.arrayBuffer().then(function (buf) {
       var wb = new ExcelJS.Workbook();
       return wb.xlsx.load(buf).then(function () {
-        var found = {};
-        X.workbookToSheets(wb).forEach(function (sh) {
-          for (var r = 0; r < Math.min(10, sh.rows.length); r++) {
-            var row = sh.rows[r].map(function (x) { return x === null ? '' : String(x).trim(); });
-            var ci = row.indexOf('感測器編號'), ni = row.indexOf('感測器名稱');
-            if (ci < 0 || ni < 0) continue;
-            for (var k = r + 1; k < sh.rows.length; k++) {
-              var id = sh.rows[k][ci], nm = sh.rows[k][ni];
-              if (id !== null && id !== undefined && nm) found[String(id).trim()] = String(nm).trim();
-            }
-            break;
+        var parsed = M.parseMapping(X.workbookToSheets(wb));
+        var plan = M.planMapping(parsed, state.sensors, dataIds());
+        var h = '<div class="card">';
+        if (!plan.ok) {
+          h += '<div class="msg err"><b>無法匯入：</b><br>' + plan.errors.map(esc).join('<br>') + '</div>';
+        } else {
+          h += '<div class="msg info">「' + esc(f.name) + '」共 ' + parsed.rows.length + ' 台：要修改 <b>' + plan.changes.length + '</b> 台、沒有變動 ' + plan.same + ' 台。</div>';
+          if (plan.noData.length) h += '<div class="msg warn">以下編號目前還沒有匯入資料，會先記下：' + esc(plan.noData.join('、')) + '</div>';
+          if (plan.warnings.length) h += '<div class="msg warn">' + plan.warnings.map(esc).join('<br>') + '</div>';
+          if (plan.changes.length) {
+            h += '<table><tr><th>月報編號</th><th>報表編號</th><th class="l">感測器名稱</th></tr>' + plan.changes.map(function (c) {
+              var ridTxt = c.oldRid === c.rid ? esc(c.rid) : '<s>' + esc(c.oldRid) + '</s> → <b>' + esc(c.rid) + '</b>';
+              var nmTxt = c.oldName === c.name ? esc(c.name) : '<s>' + esc(c.oldName) + '</s> → <b>' + esc(c.name) + '</b>';
+              return '<tr><td>' + esc(c.src) + '</td><td>' + ridTxt + '</td><td class="l">' + nmTxt + '</td></tr>';
+            }).join('') + '</table>';
+            h += '<div class="row"><button id="mapYes" class="primary" type="button">確認套用</button><button id="mapNo" type="button">取消</button></div>';
+            mapPending = plan;
           }
-        });
-        var n = 0;
-        document.querySelectorAll('.namein').forEach(function (inp) { if (found[inp.dataset.id]) { inp.value = found[inp.dataset.id]; n++; } });
-        var total = Object.keys(found).length;
-        $('namesMsg').innerHTML = total ? '<span class="msg info">從舊報表找到 ' + total + ' 個名稱，已填入 ' + n + ' 個。確認後請按「儲存名稱」。</span>'
-          : '<span class="msg err">這份檔案裡找不到「感測器編號」「感測器名稱」兩欄。</span>';
+        }
+        $('mapPreview').innerHTML = h + '</div>';
+        if ($('mapYes')) {
+          $('mapYes').onclick = function () {
+            if (state.loadError || !mapPending) return;
+            $('mapYes').disabled = true;
+            var n = mapPending.ops.length;
+            Store.writeBatch(mapPending.ops).then(function () {
+              mapPending = null;
+              return reload();
+            }).then(function () {
+              renderNames();
+              $('mapPreview').innerHTML = '<div class="msg ok">已更新 ' + n + ' 台感測器的編號／名稱。之後下載的報表會自動使用新的設定。</div>';
+            }).catch(function (er) { $('mapPreview').innerHTML = '<div class="msg err">套用失敗，沒有任何變更：' + esc(er.message || er) + '</div>'; });
+          };
+          $('mapNo').onclick = function () { mapPending = null; $('mapPreview').innerHTML = ''; };
+        }
       });
-    }).catch(function (err) { $('namesMsg').innerHTML = '<span class="msg err">無法讀取：' + esc(err.message || err) + '</span>'; });
+    }).catch(function (err) { $('mapPreview').innerHTML = '<div class="msg err">無法讀取這份檔案：請確認是 .xlsx 且沒有密碼保護。</div>'; });
   });
 
   // ---------------- ② 備註時段確認 ----------------
   var LABEL = { TMP: 'TMP', HUM: 'HUM', PM10: 'PM10', PM25: 'PM2.5', TVOC: 'TVOC', WD: 'WD 風向', WS: 'WS 風速', RA: '雨量', LEQ: 'Leq' };
   var draft = {}; // key → exclude 陣列（畫面上尚未確認的勾選）
   function review() { return state.meta.review || {}; }
+  function manual() { return state.meta.manual || []; }
+  function applyAll(base, rev, man) { return M.applyManual(M.applyExclusions(base, rev), man); }
   function reviewHint() {
     var n = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
     return n ? '<br><b>有 ' + n + ' 個備註時段需要確認</b>，請到「② 備註時段確認」。' : '';
@@ -480,7 +539,14 @@
     });
   }
   function isPmZero(it, f) { return it.v[f] === 0 && (f === 'PM10' || f === 'PM25') && $('optPmZero').checked; }
-  function editable(it, f) { return it.validFields.indexOf(f) >= 0 && !isPmZero(it, f); }
+  function isPmRatio(it, f) {
+    if ((f !== 'PM10' && f !== 'PM25') || !$('optPmRatio').checked) return false;
+    var a = it.v.PM10, b = it.v.PM25;
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    if ($('optPmZero').checked && (a === 0 || b === 0)) return false;
+    return b > a;
+  }
+  function editable(it, f) { return it.validFields.indexOf(f) >= 0 && !isPmZero(it, f) && !isPmRatio(it, f); }
 
   function renderNoteFilter(base) {
     var cnt = {}, order = [];
@@ -531,6 +597,7 @@
         var v = it.v[f];
         if (v === null || v === undefined) { h += '<td class="val"><span class="hint">異常值<br>（已不計）</span></td>'; return; }
         if (isPmZero(it, f)) { h += '<td class="val"><span class="v">0</span><span class="hint">PM 為 0<br>已不計</span></td>'; return; }
+        if (isPmRatio(it, f)) { h += '<td class="val"><span class="v">' + esc(v) + '</span><span class="hint">PM2.5&gt;PM10<br>已不計</span></td>'; return; }
         var x = ex.indexOf(f) >= 0;
         h += '<td class="val' + (x ? ' x' : '') + '"><span class="v">' + esc(v) + '</span><label><input type="checkbox" data-f="' + f + '"' + (x ? ' checked' : '') + '> 不採用</label></td>';
       });
@@ -662,17 +729,18 @@
   });
 
   /** 比較確認前後，受影響的感測器日各項數值 */
-  function recalcDiff(dayKeys, before, after) {
+  function recalcDiff(dayKeys, before, after, manBefore, manAfter) {
+    if (manBefore === undefined) { manBefore = manual(); manAfter = manual(); }
     var out = [];
-    var opts = { fillMissingDays: false, zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [] };
+    var opts = { fillMissingDays: false, zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked };
     var bySensor = {};
     dayKeys.forEach(function (k) { var p = k.split('|'); (bySensor[p[0]] = bySensor[p[0]] || []).push(p[1]); });
     Object.keys(bySensor).forEach(function (id) {
       var ds = bySensor[id].sort();
       var range = { from: ds[0], to: ds[ds.length - 1] };
       var base = M.sensorsFromChunks(state.chunks.filter(function (c) { return c.id === id; }), state.sensors, range);
-      var A = Core.buildReports(M.applyExclusions(base, before), range, opts);
-      var B = Core.buildReports(M.applyExclusions(base, after), range, opts);
+      var A = Core.buildReports(applyAll(base, before, manBefore), range, opts);
+      var B = Core.buildReports(applyAll(base, after, manAfter), range, opts);
       ['air', 'noise'].forEach(function (kind) {
         var bmap = {}; B[kind].forEach(function (r) { bmap[r.date] = r; });
         A[kind].forEach(function (ra) {
@@ -686,16 +754,103 @@
     });
     return out;
   }
-  function showRecalc(diff, nDays) {
+  function showRecalc(diff, nDays, target, verb) {
     var fmt = function (v) { return v === null || v === undefined ? '（空白）' : esc(v); };
-    var h = '<div class="msg ok">已確認並重新計算 ' + nDays + ' 個感測器日。' + (diff.length ? '以下 ' + diff.length + ' 個數值因此改變：' : '各項數值都沒有改變（全部採用原始數值）。') + '</div>';
+    var h = '<div class="msg ok">' + (verb || '已確認並重新計算') + ' ' + nDays + ' 個感測器日。' + (diff.length ? '以下 ' + diff.length + ' 個數值因此改變：' : '各項數值都沒有改變。') + '</div>';
     if (diff.length) {
       h += '<table><tr><th>感測器</th><th>日期</th><th>項目</th><th>確認前</th><th>確認後</th></tr>' + diff.map(function (d) {
         return '<tr><td>' + esc(d[0]) + ' ' + esc(sensorName(d[0])) + '</td><td>' + Core.toRoc(d[1]) + '</td><td>' + esc(d[2]) + '</td><td>' + fmt(d[3]) + '</td><td><b>' + fmt(d[4]) + '</b></td></tr>';
       }).join('') + '</table>';
     }
-    $('reviewResult').innerHTML = h;
+    $(target || 'reviewResult').innerHTML = h;
   }
+
+  // ---------------- 手動新增不採用時段 ----------------
+  function sensorFields(id) {
+    var f = {};
+    state.chunks.forEach(function (c) { if (c.id === id) c.fields.forEach(function (x) { f[x] = true; }); });
+    return M.REVIEW_FIELDS.filter(function (x) { return f[x]; });
+  }
+  function fillManualForm() {
+    var ids = {}; state.chunks.forEach(function (c) { ids[c.id] = true; });
+    var keep = $('mnSensor').value;
+    $('mnSensor').innerHTML = Object.keys(ids).sort().map(function (id) { return '<option value="' + esc(id) + '">' + esc(id + ' ' + sensorName(id)) + '</option>'; }).join('');
+    if (ids[keep]) $('mnSensor').value = keep;
+    renderManualFields(); renderManualList(); manualPreview();
+  }
+  function renderManualFields() {
+    var keep = {}; $('mnFields').querySelectorAll('input:checked').forEach(function (cb) { keep[cb.dataset.mf] = true; });
+    $('mnFields').innerHTML = sensorFields($('mnSensor').value).map(function (f) {
+      return '<label class="bf"><input type="checkbox" data-mf="' + f + '"' + (keep[f] ? ' checked' : '') + '> ' + LABEL[f] + '</label>';
+    }).join('') || '<span class="hint">（請先匯入資料）</span>';
+  }
+  function readManualForm() {
+    var id = $('mnSensor').value, a = $('mnFrom').value, b = $('mnTo').value;
+    var fields = Array.from($('mnFields').querySelectorAll('input:checked')).map(function (cb) { return cb.dataset.mf; });
+    if (!id) return { error: '請選擇感測器。' };
+    if (!a || !b) return { error: '請填入起訖時間。' };
+    var from = a.replace('T', ' ').slice(0, 16), to = b.replace('T', ' ').slice(0, 16);
+    if (from > to) return { error: '起始時間晚於結束時間。' };
+    if (!fields.length) return { error: '請勾選至少一個測項。' };
+    return { id: id, from: from, to: to, fields: fields, reason: $('mnReason').value.trim() };
+  }
+  function manualPreview() {
+    var m = readManualForm(), el = $('mnPreview');
+    if (m.error) { el.hidden = true; return; }
+    var imp = M.manualImpact(state.chunks, m);
+    el.hidden = false;
+    el.innerHTML = imp.hours ? '這個範圍有 <b>' + imp.hours + '</b> 小時資料（' + imp.days.length + ' 天），會把 <b>' + imp.cells + '</b> 個有效數值設為不採用。'
+      : '<span class="msg warn">這個範圍內沒有這台感測器的資料。</span>';
+  }
+  ['mnFrom', 'mnTo', 'mnReason'].forEach(function (id) { $(id).addEventListener('input', manualPreview); $(id).addEventListener('change', manualPreview); });
+  $('mnSensor').addEventListener('change', function () { renderManualFields(); manualPreview(); });
+  $('mnFields').addEventListener('change', manualPreview);
+  function saveManual(after, dayKeys, msgVerb) {
+    var before = manual();
+    return Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'manual', value: after } }]).then(function () {
+      var diff = recalcDiff(dayKeys, review(), review(), before, after);
+      return reload().then(function () { renderManualList(); showRecalc(diff, dayKeys.length, 'mnResult', msgVerb); });
+    });
+  }
+  $('mnAdd').addEventListener('click', function () {
+    if (state.loadError) return;
+    $('mnResult').innerHTML = '';
+    var m = readManualForm();
+    if (m.error) { $('mnResult').innerHTML = '<div class="msg err">' + esc(m.error) + '</div>'; return; }
+    var imp = M.manualImpact(state.chunks, m);
+    if (!imp.hours) { $('mnResult').innerHTML = '<div class="msg err">這個範圍內沒有這台感測器的資料，沒有新增。</div>'; return; }
+    m.uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    m.at = new Date().toISOString();
+    var after = manual().concat([m]);
+    $('mnAdd').disabled = true;
+    saveManual(after, imp.days.map(function (d) { return m.id + '|' + d; }), '已新增手動不採用時段並重新計算')
+      .catch(function (e) { $('mnResult').innerHTML = '<div class="msg err">儲存失敗，沒有新增：' + esc(e.message || e) + '</div>'; })
+      .then(function () { $('mnAdd').disabled = false; });
+  });
+  function fmtTs(t) { return Core.toRoc(t.slice(0, 10)) + ' ' + t.slice(11); }
+  function renderManualList() {
+    var list = manual();
+    if (!list.length) { $('mnList').innerHTML = '<p class="hint">尚未設定。</p>'; return; }
+    $('mnList').innerHTML = '<table><tr><th>感測器</th><th>從</th><th>到</th><th>測項</th><th class="l">原因</th><th>影響</th><th></th></tr>' + list.map(function (m) {
+      var imp = M.manualImpact(state.chunks, m);
+      return '<tr><td>' + esc(m.id) + '<br><span class="hint">' + esc(sensorName(m.id)) + '</span></td><td>' + fmtTs(m.from) + '</td><td>' + fmtTs(m.to) + '</td><td>' + m.fields.map(function (f) { return LABEL[f]; }).join('、') +
+        '</td><td class="l">' + esc(m.reason || '') + '</td><td>' + imp.hours + ' 小時</td><td><button data-del="' + esc(m.uid) + '">刪除</button><span class="delc" data-for="' + esc(m.uid) + '" hidden> 確定刪除？<button class="danger" data-delyes="' + esc(m.uid) + '">確定</button><button data-delno="1">取消</button></span></td></tr>';
+    }).join('') + '</table>';
+  }
+  $('mnList').addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.dataset.del) { t.hidden = true; $('mnList').querySelector('.delc[data-for="' + t.dataset.del + '"]').hidden = false; return; }
+    if (t.dataset.delno) { renderManualList(); return; }
+    if (t.dataset.delyes) {
+      if (state.loadError) return;
+      $('mnResult').innerHTML = '';
+      var m = manual().filter(function (x) { return x.uid === t.dataset.delyes; })[0];
+      var after = manual().filter(function (x) { return x.uid !== t.dataset.delyes; });
+      var imp = m ? M.manualImpact(state.chunks, m) : { days: [] };
+      saveManual(after, imp.days.map(function (d) { return m.id + '|' + d; }), '已刪除手動不採用時段並重新計算')
+        .catch(function (er) { $('mnResult').innerHTML = '<div class="msg err">刪除失敗：' + esc(er.message || er) + '</div>'; });
+    }
+  });
 
   // ---------------- ⑥ 備份 ----------------
   $('backupBtn').addEventListener('click', function () {
