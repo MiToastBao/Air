@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>環境監測季報產生器</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>環境監測季報產生器</h1>
+    <p class="sub">匯入每月數據月報 → 選擇季別或區間 → 下載「空氣品質日均」與「噪音 Leq 日晚夜」報表</p>
+  </div>
+</header>
+
+<div id="fatal" class="wrap fatal" hidden></div>
+
+<nav class="tabs wrap" role="tablist">
+  <button role="tab" data-tab="import" class="on">① 匯入月報</button>
+  <button role="tab" data-tab="review">② 備註時段確認 <span id="reviewBadge" class="badge" hidden></span></button>
+  <button role="tab" data-tab="data">③ 已匯入資料</button>
+  <button role="tab" data-tab="report">④ 產出報表</button>
+  <button role="tab" data-tab="names">⑤ 感測器名稱</button>
+  <button role="tab" data-tab="backup">⑥ 備份與還原</button>
+</nav>
+
+<main class="wrap">
+  <!-- ① 匯入 -->
+  <section id="tab-import" class="panel">
+    <div class="card">
+      <h2>匯入數據月報</h2>
+      <p class="hint">可一次選多份 .xlsx。系統依<strong>工作表內容</strong>判讀感測器與欄位，不看檔名。重複匯入同一個月會<strong>覆蓋</strong>，不會重複計算。</p>
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" accept=".xlsx" multiple>
+        <span>按這裡選擇檔案，或把檔案拖進來</span>
+      </label>
+      <div id="importBusy" class="busy" hidden></div>
+    </div>
+    <div id="importPreview"></div>
+  </section>
+
+  <!-- ② 備註時段確認 -->
+  <section id="tab-review" class="panel" hidden>
+    <div class="card">
+      <h2>備註時段確認</h2>
+      <p class="hint">月報「備註」欄有文字的時段，通常代表設備有狀況，但數值不一定是負值。請逐列確認：數值可以用就保留；不能用的，勾選該格的「不採用」。確認後按下方的「確認並重新計算」。</p>
+      <div id="reviewSummary"></div>
+      <div class="row">
+        顯示
+        <select id="rvStatus"><option value="todo">待確認</option><option value="confirmed">已確認</option><option value="all">全部</option></select>
+        感測器 <select id="rvSensor"></select>
+        月份 <select id="rvMonth"></select>
+      </div>
+      <div id="reviewTable" class="scroll"></div>
+      <div class="row" id="reviewActions" hidden>
+        <button id="rvConfirm" class="primary">確認並重新計算</button>
+        <span class="hint" id="rvCount"></span>
+      </div>
+      <div id="reviewResult"></div>
+    </div>
+  </section>
+
+  <!-- ③ 已匯入 -->
+  <section id="tab-data" class="panel" hidden>
+    <div class="card">
+      <h2>已匯入的月份</h2>
+      <p class="hint">數字是每個感測器當月的資料筆數（逐時資料一天 24 筆）。缺整個月的格子會標成紅色。</p>
+      <div id="coverage" class="scroll"></div>
+    </div>
+    <div class="card">
+      <h3>刪除某個月的資料</h3>
+      <p class="hint">匯入錯檔時使用。刪除後可重新匯入正確的月報。</p>
+      <div class="row">
+        <select id="delMonth"></select>
+        <button id="delBtn" class="danger">刪除這個月</button>
+        <span id="delConfirm" hidden>
+          確定要刪除 <b id="delMonthLabel"></b> 所有感測器的資料？
+          <button id="delYes" class="danger">確定刪除</button>
+          <button id="delNo">取消</button>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 報表 -->
+  <section id="tab-report" class="panel" hidden>
+    <div class="card">
+      <h2>選擇報表期間</h2>
+      <div class="modes">
+        <label><input type="radio" name="mode" value="quarter" checked> 季別</label>
+        <label><input type="radio" name="mode" value="months"> 月份區間</label>
+        <label><input type="radio" name="mode" value="dates"> 自訂日期</label>
+        <label><input type="radio" name="mode" value="all"> 全部累積</label>
+      </div>
+      <div class="row" data-mode="quarter">
+        民國 <input type="number" id="qYear" min="100" max="200" class="num"> 年
+        <select id="qNum"><option value="1">第 1 季（1–3 月）</option><option value="2">第 2 季（4–6 月）</option><option value="3">第 3 季（7–9 月）</option><option value="4">第 4 季（10–12 月）</option></select>
+      </div>
+      <div class="row" data-mode="months" hidden>
+        從 <select id="mFrom"></select> 到 <select id="mTo"></select>
+      </div>
+      <div class="row" data-mode="dates" hidden>
+        從 <input type="date" id="dFrom"> 到 <input type="date" id="dTo">
+      </div>
+      <div class="row" data-mode="all" hidden><span class="hint">從最早匯入的月份到最新的月份。</span></div>
+
+      <h3>選項</h3>
+      <label class="opt"><input type="checkbox" id="optRain" checked> 空品報表加上「日累積雨量」欄（只有具雨量的測站會有數值）</label>
+      <label class="opt"><input type="checkbox" id="optFill" checked> 期間內整天沒有資料的日子也列出，備註「當日無資料」</label>
+      <label class="opt"><input type="checkbox" id="optPmZero" checked> PM10、PM2.5 測值為 0 視為儀器異常、不列入計算（與原 Access 相同）</label>
+
+      <div id="rangeInfo" class="info"></div>
+      <div class="row">
+        <button id="dlAir" class="primary">下載 空氣品質日均報表</button>
+        <button id="dlNoise" class="primary">下載 噪音Leq日晚夜報表</button>
+      </div>
+      <div id="reportMsg"></div>
+    </div>
+    <div class="card">
+      <h3>計算方式（重點）</h3>
+      <ul class="rules">
+        <li>負值（-9999 等）、空白、文字＝儀器異常，不計入、也不當 0。</li>
+        <li>空品：當日有效值平均，一般四捨五入到小數 1 位；雨量為當日加總。</li>
+        <li>最頻風向：角度換算 16 方位，只採計風速 &gt; 0.3 m/s 的小時，取當日出現次數最多者；並列最多時全部列出（例：「南風、西南風」）。</li>
+        <li>噪音：日 06–20、晚 20–22、夜＝當日 00–06 加 22–24，能量平均。</li>
+        <li>備註欄列出有效資料小時數、確認不採用的小時數，以及月報原本的備註（例如「伺服器異常×4」）。</li>
+        <li>「② 備註時段確認」中勾選不採用的數值，不列入計算。</li>
+      </ul>
+      <p class="hint">詳細說明請看 <a href="使用說明.html" target="_blank">使用說明</a>。</p>
+    </div>
+  </section>
+
+  <!-- ⑤ 名稱 -->
+  <section id="tab-names" class="panel" hidden>
+    <div class="card">
+      <h2>感測器名稱</h2>
+      <p class="hint">報表「感測器名稱」欄使用這裡的名稱。第一次匯入時會先用月報表頭文字，可直接修改。</p>
+      <div class="row">
+        <label class="btnlike">從舊報表帶入名稱<input type="file" id="nameFile" accept=".xlsx" hidden></label>
+        <span class="hint">（選一份以前匯出的報表，讀取「感測器編號」「感測器名稱」兩欄）</span>
+      </div>
+      <div id="names" class="scroll"></div>
+      <div class="row"><button id="saveNames" class="primary">儲存名稱</button><span id="namesMsg"></span></div>
+    </div>
+  </section>
+
+  <!-- ⑥ 備份 -->
+  <section id="tab-backup" class="panel" hidden>
+    <div class="card">
+      <h2>備份與還原</h2>
+      <p class="hint">匯入的資料只存在<strong>這台電腦的這個瀏覽器</strong>裡，不會上傳到 GitHub。換電腦、換瀏覽器或清除瀏覽資料前，請先下載備份。</p>
+      <div class="row"><button id="backupBtn" class="primary">下載備份檔</button></div>
+      <h3>還原</h3>
+      <p class="hint">還原會<strong>取代</strong>目前瀏覽器裡的全部資料。</p>
+      <div class="row">
+        <label class="btnlike">選擇備份檔還原<input type="file" id="restoreFile" accept=".json" hidden></label>
+        <span id="restoreMsg"></span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
+</footer>
+
+<script src="vendor/exceljs.min.js"></script>
+<script src="js/version.js"></script>
+<script src="js/core.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/xlsxio.js"></script>
+<script src="js/model.js"></script>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
