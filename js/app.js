@@ -511,17 +511,49 @@
     var n = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
     $('reviewBadge').hidden = !n; $('reviewBadge').textContent = n;
   }
-  function fillReviewFilters() {
-    var ri = M.reviewItems(state.chunks, review()).items;
-    var ids = {}, ms = {};
-    ri.forEach(function (it) { ids[it.id] = true; ms[it.ts.slice(0, 7)] = true; });
-    var keepS = $('rvSensor').value, keepM = $('rvMonth').value;
-    $('rvSensor').innerHTML = '<option value="">全部</option>' + Object.keys(ids).sort().map(function (id) { return '<option value="' + esc(id) + '">' + esc(id + ' ' + sensorName(id)) + '</option>'; }).join('');
-    $('rvMonth').innerHTML = '<option value="">全部</option>' + Object.keys(ms).sort().map(function (m) { return '<option value="' + m + '">' + rocMonth(m) + '</option>'; }).join('');
-    if (ids[keepS]) $('rvSensor').value = keepS;
-    if (ms[keepM]) $('rvMonth').value = keepM;
+  // 感測器、月份下拉只列出「目前顯示狀態」下還有資料的選項，並附筆數；
+  // 某台感測器全部確認完就從「待確認」的下拉消失，不會選了才發現早就處理過。
+  function statusMatch(it) {
+    var st = $('rvStatus').value;
+    if (st === 'todo') return it.status !== 'confirmed';
+    if (st === 'confirmed') return it.status === 'confirmed';
+    return true;
   }
-  ['rvStatus', 'rvSensor', 'rvMonth'].forEach(function (id) { $(id).addEventListener('change', function () { $('reviewResult').innerHTML = ''; $('rvBulkMsg').innerHTML = ''; renderReview(); }); });
+  function fillReviewFilters() {
+    var ri = M.reviewItems(state.chunks, review()).items.filter(statusMatch);
+    var keepS = $('rvSensor').value, keepM = $('rvMonth').value;
+    var byS = {}, byM = {};
+    ri.forEach(function (it) {
+      var m = it.ts.slice(0, 7);
+      if (!keepM || m === keepM) byS[it.id] = (byS[it.id] || 0) + 1;
+      if (!keepS || it.id === keepS) byM[m] = (byM[m] || 0) + 1;
+    });
+    // 已選的感測器／月份在新狀態下沒有資料了 → 回到「全部」
+    var resetS = keepS && !ri.some(function (it) { return it.id === keepS && (!keepM || it.ts.slice(0, 7) === keepM); });
+    var resetM = keepM && !ri.some(function (it) { return it.ts.slice(0, 7) === keepM && (!keepS || resetS || it.id === keepS); });
+    if (resetS || resetM) {
+      if (resetS) keepS = '';
+      if (resetM) keepM = '';
+      byS = {}; byM = {};
+      ri.forEach(function (it) {
+        var m = it.ts.slice(0, 7);
+        if (!keepM || m === keepM) byS[it.id] = (byS[it.id] || 0) + 1;
+        if (!keepS || it.id === keepS) byM[m] = (byM[m] || 0) + 1;
+      });
+    }
+    var totS = Object.keys(byS).reduce(function (a, k) { return a + byS[k]; }, 0);
+    var totM = Object.keys(byM).reduce(function (a, k) { return a + byM[k]; }, 0);
+    $('rvSensor').innerHTML = '<option value="">全部（' + totS + '）</option>' + Object.keys(byS).sort().map(function (id) {
+      return '<option value="' + esc(id) + '">' + esc(id + ' ' + sensorName(id)) + '（' + byS[id] + '）</option>';
+    }).join('');
+    $('rvMonth').innerHTML = '<option value="">全部（' + totM + '）</option>' + Object.keys(byM).sort().map(function (m) {
+      return '<option value="' + m + '">' + rocMonth(m) + '（' + byM[m] + '）</option>';
+    }).join('');
+    $('rvSensor').value = byS[keepS] ? keepS : '';
+    $('rvMonth').value = byM[keepM] ? keepM : '';
+    return { resetS: resetS, resetM: resetM };
+  }
+  ['rvStatus', 'rvSensor', 'rvMonth'].forEach(function (id) { $(id).addEventListener('change', function () { $('reviewResult').innerHTML = ''; $('rvBulkMsg').innerHTML = ''; fillReviewFilters(); renderReview(); }); });
 
   var shown = [];
   var selected = {};      // key → true：左邊「選取」勾起來的列
