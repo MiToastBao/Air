@@ -114,3 +114,24 @@ body.busy-cursor, body.busy-cursor *{cursor:progress !important}
 .ov{display:block;text-align:left;width:100%;margin:4px 0;padding:8px 12px}
 .ov b{font-size:16px}
 .tag.gray{background:#eceff3;color:#3d4957}
+.jumpbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#17324f;color:#fff;padding:6px 10px;border-radius:0 0 8px 8px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.jumpbar button{padding:3px 10px;font-size:14px;background:#fff;border-color:#fff}
+.jumpbar .jl{font-size:14px}
+.jumpbar .jsp{flex:1}
+.jumpbar .jn{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--danger);color:#fff;font-size:12px;line-height:17px}
+.jumpbar .jn:empty{display:none}
+.jumpbar .jn.g{background:#5a6878}.jumpbar .jn.w{background:#8a5a00}
+#tab-review .bulk{top:48px}
+#tab-review > .card{scroll-margin-top:56px}
+.card > h2.foldh{cursor:pointer;user-select:none}
+.card > h2.foldh::before{content:"▾ ";color:var(--muted)}
+.card.folded > h2.foldh::before{content:"▸ "}
+.card.folded > .cardbody{display:none}
+.card > h2.foldh .foldtip{font-size:13px;color:var(--muted);font-weight:normal;margin-left:6px}
+details.fold{margin:6px 0}
+details.fold > summary{cursor:pointer;color:var(--primary);font-weight:bold;padding:4px 0}
+details.fold[open] > summary .fc, details.fold:not([open]) > summary .fo{display:none}
+tr.oldm{display:none}
+table.showall tr.oldm{display:table-row}
+details.fold > summary{list-style:none}
+details.fold > summary::-webkit-details-marker{display:none}

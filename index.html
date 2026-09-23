@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css?v=1.7.0">
+<link rel="stylesheet" href="css/app.css?v=1.8.1">
 </head>
 <body>
 <header class="top">
@@ -63,6 +63,18 @@
 
   <!-- ② 資料異常確認 -->
   <section id="tab-review" class="panel" hidden>
+    <nav class="jumpbar" id="jumpBar" aria-label="快速跳轉">
+      <span class="jl">跳到：</span>
+      <button type="button" data-jump="ovCard">總覽</button>
+      <button type="button" data-jump="rvCard">月報備註時段 <span class="jn" id="jnRv"></span></button>
+      <button type="button" data-jump="suspectCard">疑似異常 <span class="jn" id="jnSg"></span></button>
+      <button type="button" data-jump="mnCard">手動不採用 <span class="jn" id="jnMn"></span></button>
+      <button type="button" data-jump="gapCard">資料缺漏 <span class="jn" id="jnGp"></span></button>
+      <span class="jsp"></span>
+      <button type="button" id="jumpTop">↑ 回頂端</button>
+      <button type="button" id="foldAll">全部收合</button>
+      <button type="button" id="openAll">全部展開</button>
+    </nav>
     <div class="card" id="ovCard">
       <h2>資料異常總覽</h2>
       <p class="hint">這一頁集中列出所有會影響報表的狀況。點下方項目可跳到該區。</p>
@@ -123,17 +135,6 @@
       </div>
       <div id="sgList"></div>
     </div>
-    <div class="card" id="gapCard">
-      <h2>資料缺漏與無效測值 <span class="hint">（只供檢查，這些小時本來就不列入計算）</span></h2>
-      <p class="hint">列出三種情形：<b>整月沒有資料</b>（某感測器在已匯入的月份完全沒有資料，可能是漏匯入該感測器）、<b>缺少小時</b>（月報少了這些小時，整列都沒有）、<b>測值空白或無效</b>（有這一列，但數值是空白、負值或文字）。報表備註欄會寫出有效資料小時數；缺少小時也會寫明是哪幾點。</p>
-      <div class="row">
-        類型 <select id="gpKind"><option value="">全部</option><option value="month">整月沒有資料</option><option value="missing">缺少小時</option><option value="blank">測值空白或無效</option></select>
-        感測器 <select id="gpSensor"></select>
-        月份 <select id="gpMonth"></select>
-      </div>
-      <div id="gpSummary"></div>
-      <div id="gpList" class="scroll"></div>
-    </div>
     <div class="card" id="mnCard">
       <h2>手動新增不採用時段</h2>
       <p class="hint">月報沒有寫備註、但您判斷數值有問題的時段，可以在這裡指定感測器、起訖時間與測項，一次設為不採用。起訖時間都包含在內。</p>
@@ -152,6 +153,20 @@
       <h3>已設定的手動不採用時段</h3>
       <div id="mnList" class="scroll"></div>
     </div>
+    <div class="card" id="gapCard">
+      <h2>資料缺漏與無效測值 <span class="hint">（只供檢查，這些小時本來就不列入計算）</span></h2>
+      <p class="hint">列出三種情形：<b>整月沒有資料</b>（某感測器在已匯入的月份完全沒有資料，可能是漏匯入該感測器）、<b>缺少小時</b>（月報少了這些小時，整列都沒有）、<b>測值空白或無效</b>（有這一列，但數值是空白、負值或文字）。報表備註欄會寫出有效資料小時數；缺少小時也會寫明是哪幾點。</p>
+      <div id="gpSummary"></div>
+      <details class="notefilter" id="gpBox">
+        <summary id="gpSum">展開清單（預設收合）</summary>
+      <div class="row">
+        類型 <select id="gpKind"><option value="">全部</option><option value="month">整月沒有資料</option><option value="missing">缺少小時</option><option value="blank">測值空白或無效</option></select>
+        感測器 <select id="gpSensor"></select>
+        月份 <select id="gpMonth"></select>
+      </div>
+      <div id="gpList" class="scroll"></div>
+      </details>
+    </div>
   </section>
 
   <!-- ③ 已匯入 -->
@@ -159,13 +174,14 @@
     <div class="card">
       <h2>已匯入的月份</h2>
       <p class="hint">數字是每個感測器當月的資料筆數（逐時資料一天 24 筆）。缺整個月的格子會標成紅色。</p>
+      <div class="row" id="covTools" hidden><button type="button" id="covAll"></button><span class="hint" id="covHint"></span></div>
       <div id="coverage" class="scroll"></div>
     </div>
     <div class="card">
       <h3>刪除某個月的資料</h3>
       <p class="hint">匯入錯檔時使用。刪除後可重新匯入正確的月報。</p>
       <div class="row">
-        <select id="delMonth"></select>
+        <select id="delYear" aria-label="年"></select> <select id="delMonth" aria-label="月"></select>
         <button id="delBtn" class="danger">刪除這個月</button>
         <span id="delConfirm" hidden>
           確定要刪除 <b id="delMonthLabel"></b> 所有感測器的資料？
@@ -299,14 +315,14 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.7.0"></script>
-<script src="js/version.js?v=1.7.0"></script>
-<script src="js/core.js?v=1.7.0"></script>
-<script src="js/parser.js?v=1.7.0"></script>
-<script src="js/xlsxio.js?v=1.7.0"></script>
-<script src="js/model.js?v=1.7.0"></script>
-<script src="js/store.js?v=1.7.0"></script>
-<script src="js/app.js?v=1.7.0"></script>
+<script src="vendor/exceljs.min.js?v=1.8.1"></script>
+<script src="js/version.js?v=1.8.1"></script>
+<script src="js/core.js?v=1.8.1"></script>
+<script src="js/parser.js?v=1.8.1"></script>
+<script src="js/xlsxio.js?v=1.8.1"></script>
+<script src="js/model.js?v=1.8.1"></script>
+<script src="js/store.js?v=1.8.1"></script>
+<script src="js/app.js?v=1.8.1"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>

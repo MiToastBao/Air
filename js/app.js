@@ -42,6 +42,44 @@
     ['fileInput', 'delBtn', 'saveNames', 'saveLife', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm', 'clrProj', 'clrAll', 'projNew', 'projDel', 'autoSave'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
   }
 
+  // ---------------- 展開／收合 ----------------
+  var foldState = {};
+  /** 長清單包成可展開收合的區塊；n 筆以內預設展開，超過預設收合；使用者按過就記住 */
+  function fold(key, inner, n, unit, limit) {
+    var open = key in foldState ? foldState[key] : n <= (limit || 12);
+    return '<details class="fold" data-fold="' + key + '"' + (open ? ' open' : '') + '><summary><span class="fo">▾ 收合</span><span class="fc">▸ 展開</span>（共 ' + n + ' ' + unit + '）</summary>' + inner + '</details>';
+  }
+  document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.dataset && d.dataset.fold) foldState[d.dataset.fold] = d.open; }, true);
+  // ② 每個區塊的標題可點擊展開／收合
+  document.querySelectorAll('#tab-review > .card').forEach(function (card) {
+    var h2 = card.querySelector(':scope > h2'); if (!h2) return;
+    var body = document.createElement('div'); body.className = 'cardbody';
+    while (h2.nextSibling) body.appendChild(h2.nextSibling);
+    card.appendChild(body);
+    h2.classList.add('foldh'); h2.title = '點一下展開／收合';
+    h2.insertAdjacentHTML('beforeend', '<span class="foldtip">（點標題可收合）</span>');
+    h2.addEventListener('click', function (e) { if (e.target.closest('a,button,input,select,label')) return; setFold(card, !card.classList.contains('folded')); });
+  });
+  function setFold(card, folded) {
+    card.classList.toggle('folded', folded);
+    var t = card.querySelector('.foldtip'); if (t) t.textContent = folded ? '（已收合，點標題展開）' : '（點標題可收合）';
+  }
+  document.querySelectorAll('#jumpBar [data-jump]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var card = $(b.dataset.jump); setFold(card, false);
+      if (b.dataset.jump === 'gapCard') $('gpBox').open = true;
+      jumpTo(card);
+    });
+  });
+  // 上方的卡片可能還在補內容（高度會變），跳完再對準一次
+  function jumpTo(card) {
+    card.scrollIntoView({ block: 'start' });
+    [250, 700, 1400].forEach(function (t) { setTimeout(function () { var y = card.getBoundingClientRect().top; if (Math.abs(y - 56) > 30) card.scrollIntoView({ block: 'start' }); }, t); });
+  }
+  $('jumpTop').addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  $('foldAll').addEventListener('click', function () { document.querySelectorAll('#tab-review > .card').forEach(function (c) { setFold(c, true); }); $('ovCard').scrollIntoView({ block: 'start' }); });
+  $('openAll').addEventListener('click', function () { document.querySelectorAll('#tab-review > .card').forEach(function (c) { setFold(c, false); }); });
+
   function reload() {
     return Store.loadAll().then(function (d) {
       procCache = null; gapCache = null;
@@ -73,7 +111,7 @@
     state.pending = null; $('importPreview').innerHTML = ''; $('reviewResult').innerHTML = ''; $('mnResult').innerHTML = ''; $('sgMsg').innerHTML = '';
     $('reportMsg').innerHTML = ''; $('mapPreview').innerHTML = ''; $('namesMsg').innerHTML = ''; $('restoreMsg').innerHTML = ''; $('clrMsg').innerHTML = ''; $('lifeMsg').innerHTML = '';
     draft = {}; selected = {}; noteOff = {};
-    ['rvSensor', 'rvMonth', 'sgSensor', 'sgRule'].forEach(function (id) { $(id).value = ''; });
+    ['rvSensor', 'rvMonth', 'sgSensor', 'sgRule', 'delYear', 'delMonth'].forEach(function (id) { $(id).value = ''; });
     $('qYear').value = ''; $('dFrom').value = ''; $('dTo').value = '';
   }
   function switchTo(p) {
@@ -92,6 +130,12 @@
     $('projCode').value = mode === 'new' ? '' : (cur.code || ''); $('projName').value = mode === 'new' ? '' : (cur.name || '');
     $('projMsg').innerHTML = ''; $('projForm').hidden = false; $('projDelBox').hidden = true; $('projCode').focus();
   }
+  ['projCode', 'projName'].forEach(function (id) {
+    var inp = $(id);
+    inp.addEventListener('focus', function () { if (inp.value) { inp.dataset.orig = inp.value; inp.value = ''; inp.placeholder = '原本：' + inp.dataset.orig + '（沒輸入就維持原本的）'; } });
+    inp.addEventListener('blur', function () { if (!inp.value.trim() && inp.dataset.orig) inp.value = inp.dataset.orig; delete inp.dataset.orig; inp.placeholder = inp.dataset.ph || ''; });
+    inp.dataset.ph = inp.placeholder;
+  });
   $('projNew').addEventListener('click', function () { openProjForm('new'); });
   $('projEdit').addEventListener('click', function () { openProjForm('edit'); });
   $('projCancel').addEventListener('click', function () { $('projForm').hidden = true; });
@@ -194,6 +238,7 @@
   function renderPreview() {
     var p = state.pending, html = '';
     var importable = 0;
+    var nFiles = p.results.length, fileWarn = 0;
     p.results.forEach(function (r) {
       html += '<div class="card"><div class="file-title">' + esc(r.fileName);
       if (r.fatal) {
@@ -245,6 +290,11 @@
       html += '</div>';
     });
 
+    if (nFiles > 3) {
+      p.results.forEach(function (r) { if (r.fatal || r.result.blocked || r.result.issues.some(function (x) { return x.level !== 'info'; })) fileWarn++; });
+      foldState.files = fileWarn > 0 ? (foldState.files !== undefined ? foldState.files : true) : foldState.files;
+      html = '<div class="card"><b>各檔案的檢查結果</b>' + (fileWarn ? '　<span class="tag warn">' + fileWarn + ' 份需要注意</span>' : '　<span class="tag ok">都沒有問題</span>') + fold('files', html, nFiles, '份檔案', 3) + '</div>';
+    }
     var plan = p.plan;
     html += '<div class="card">';
     if (!plan.ok) {
@@ -268,9 +318,9 @@
           (st.added ? '<button id="skipImport" class="primary">只匯入新資料（重複的保留原本）</button>' : '') +
           '<button id="cancelImport">取消匯入</button></div>';
       }
-      if (plan.newInfo.length) html += '<div class="msg info"><b>新的感測器 ' + plan.newInfo.length + ' 台</b>，匯入時會自動新增（名稱取自月報表頭，可在「⑤ 感測器編號與名稱」修改）：<ul>' + plan.newInfo.map(function (x) {
+      if (plan.newInfo.length) html += '<div class="msg info"><b>新的感測器 ' + plan.newInfo.length + ' 台</b>，匯入時會自動新增（名稱取自月報表頭，可在「⑤ 感測器編號與名稱」修改）：' + fold('newsens', '<ul>' + plan.newInfo.map(function (x) {
         return '<li>' + esc(x.id) + '　' + esc(x.name) + (x.activeFrom ? '　<span class="hint">從 ' + esc(Core.toRoc(x.activeFrom)) + ' 起有資料，設為啟用日，之前的日子不算缺漏</span>' : '') + '</li>';
-      }).join('') + '</ul></div>';
+      }).join('') + '</ul>', plan.newInfo.length, '台', 8) + '</div>';
       if (plan.revived.length) html += '<div class="msg warn">以下感測器已設為停用，但這次的檔案有停用日之後的資料：' + esc(plan.revived.map(function (x) { return x.id + ' ' + x.name + '（停用日 ' + Core.toRoc(x.retiredFrom) + '）'; }).join('、')) + '。資料照樣匯入；如果感測器其實還在使用，請到「⑤ 感測器編號與名稱」清除停用日。</div>';
       if (plan.absent.length) {
         html += '<div class="dupbox" id="absentBox"><b>⚠ 這次匯入的月份缺少 ' + plan.absent.length + ' 台感測器的資料</b>（之前有匯入過這幾台）。請逐台選擇：<table style="margin-top:6px"><tr><th class="l">感測器</th><th>缺少的月份</th><th class="l">處理方式</th></tr>' + plan.absent.map(function (x) {
@@ -350,21 +400,52 @@
     var cv = M.coverage(state.chunks);
     if (!cv.months.length) { $('coverage').innerHTML = '<p class="hint">尚未匯入任何資料。</p>'; return; }
     var h = '<table><tr><th class="l">月份</th>' + cv.ids.map(function (id) { return '<th title="' + esc(sensorName(id)) + '">' + esc(id) + '<br><span class="hint">' + esc(sensorName(id)) + '</span></th>'; }).join('') + '</tr>';
-    cv.months.forEach(function (m) {
+    var RECENT = 6, old = cv.months.length - RECENT;
+    cv.months.forEach(function (m, i) {
       var exp = daysInMonth(m) * 24;
-      h += '<tr><td class="l">' + rocMonth(m) + '</td>' + cv.ids.map(function (id) {
+      h += '<tr' + (i < old ? ' class="oldm"' : '') + '><td class="l">' + rocMonth(m) + '</td>' + cv.ids.map(function (id) {
         var n = cv.table[m][id];
         if (!n) return '<td class="bad">無</td>';
         return '<td class="' + (n < exp ? 'part' : '') + '">' + n + '</td>';
       }).join('') + '</tr>';
     });
     $('coverage').innerHTML = h + '</table>';
-    var sel = $('delMonth');
-    sel.innerHTML = cv.months.map(function (m) { return '<option value="' + m + '">' + rocMonth(m) + '</option>'; }).join('');
+    var tbl = $('coverage').querySelector('table');
+    if (old > 0) {
+      if (covAll) tbl.classList.add('showall');
+      var bad = cv.months.slice(0, old).filter(function (m) { return cv.ids.some(function (id) { return !cv.table[m][id] || cv.table[m][id] < daysInMonth(m) * 24; }); }).length;
+      $('covTools').hidden = false;
+      $('covAll').textContent = covAll ? '▾ 只顯示最近 ' + RECENT + ' 個月' : '▸ 顯示全部 ' + cv.months.length + ' 個月（另有較早的 ' + old + ' 個月）';
+      $('covHint').textContent = !covAll && bad ? '較早的月份中有 ' + bad + ' 個月有缺資料或不完整（紅／黃格），展開可查看。' : '';
+    } else $('covTools').hidden = true;
+    fillDelSelects(cv.months);
   }
+  // 刪除月份：年、月分開選，預設最新的月份
+  function fillDelSelects(months) {
+    var years = []; months.forEach(function (m) { var y = m.slice(0, 4); if (years.indexOf(y) < 0) years.push(y); });
+    var ky = $('delYear').value;
+    if (years.indexOf(ky) < 0) ky = years[years.length - 1] || '';
+    $('delYear').innerHTML = years.map(function (y) { return '<option value="' + y + '">' + (Number(y) - 1911) + ' 年</option>'; }).join('');
+    $('delYear').value = ky;
+    fillDelMonth(months);
+  }
+  function fillDelMonth(months) {
+    months = months || M.coverage(state.chunks).months;
+    var y = $('delYear').value, km = $('delMonth').value;
+    var ms = months.filter(function (m) { return m.slice(0, 4) === y; });
+    if (ms.indexOf(km) < 0) km = ms[ms.length - 1] || '';
+    $('delMonth').innerHTML = ms.map(function (m) { return '<option value="' + m + '">' + Number(m.slice(5, 7)) + ' 月</option>'; }).join('');
+    $('delMonth').value = km;
+    $('delConfirm').hidden = true;
+  }
+  $('delYear').addEventListener('change', function () { $('delMonth').value = ''; fillDelMonth(); });
+  $('delMonth').addEventListener('change', function () { $('delConfirm').hidden = true; });
+  var covAll = false;
+  $('covAll').addEventListener('click', function () { covAll = !covAll; renderCoverage(); });
   $('delBtn').addEventListener('click', function () {
     if (!$('delMonth').value) return;
-    $('delMonthLabel').textContent = rocMonth($('delMonth').value);
+    var dm = $('delMonth').value, cs = state.chunks.filter(function (c) { return c.month === dm; });
+    $('delMonthLabel').textContent = rocMonth(dm) + '（' + cs.length + ' 台感測器、' + cs.reduce(function (a, c) { return a + c.rows.length; }, 0).toLocaleString() + ' 筆）';
     $('delConfirm').hidden = false;
   });
   $('delNo').addEventListener('click', function () { $('delConfirm').hidden = true; });
@@ -541,11 +622,11 @@
   function renderNames() {
     var list = allSensorMeta();
     if (!list.length) { $('names').innerHTML = '<p class="hint">尚未匯入任何資料。</p>'; return; }
-    $('names').innerHTML = '<table><tr><th>月報感測器編號</th><th class="l">月報表頭文字</th><th class="l">報表感測器編號</th><th class="l">報表感測器名稱</th></tr>' +
+    $('names').innerHTML = fold('names', '<table><tr><th>月報感測器編號</th><th class="l">月報表頭文字</th><th class="l">報表感測器編號</th><th class="l">報表感測器名稱</th></tr>' +
       list.map(function (s) {
         return '<tr><td>' + esc(s.id) + '</td><td class="l">' + esc(s.label) + '</td><td class="l"><input type="text" class="ridin" data-id="' + esc(s.id) + '" value="' + esc(s.reportId || s.id) + '" style="width:110px"></td>' +
           '<td class="l"><input type="text" class="namein" data-id="' + esc(s.id) + '" value="' + esc(s.name) + '"></td></tr>';
-      }).join('') + '</table>';
+      }).join('') + '</table>', list.length, '台感測器', 25);
   }
   function renderLife() {
     var list = allSensorMeta();
@@ -556,12 +637,12 @@
       var x = span[c.id] || (span[c.id] = { a: c.rows[0].ts, b: c.rows[c.rows.length - 1].ts });
       if (c.rows[0].ts < x.a) x.a = c.rows[0].ts; if (c.rows[c.rows.length - 1].ts > x.b) x.b = c.rows[c.rows.length - 1].ts;
     });
-    $('life').innerHTML = '<table><tr><th>月報感測器編號</th><th class="l">名稱</th><th>已匯入的資料</th><th>啟用日</th><th>停用日</th><th>狀態</th></tr>' + list.map(function (s) {
+    $('life').innerHTML = fold('life', '<table><tr><th>月報感測器編號</th><th class="l">名稱</th><th>已匯入的資料</th><th>啟用日</th><th>停用日</th><th>狀態</th></tr>' + list.map(function (s) {
       var sp = span[s.id];
       var st = s.retiredFrom ? '<span class="tag warn">已停用</span>' : '<span class="tag ok">使用中</span>';
       return '<tr><td>' + esc(s.id) + '</td><td class="l">' + esc(s.name) + '</td><td>' + (sp ? esc(fmtTs(sp.a)) + '<br>～ ' + esc(fmtTs(sp.b)) : '（無）') + '</td>' +
         '<td><input type="date" class="lifeA" data-id="' + esc(s.id) + '" value="' + esc(s.activeFrom || '') + '"></td><td><input type="date" class="lifeR" data-id="' + esc(s.id) + '" value="' + esc(s.retiredFrom || '') + '"></td><td>' + st + '</td></tr>';
-    }).join('') + '</table>';
+    }).join('') + '</table>', list.length, '台感測器', 25);
   }
   $('saveLife').addEventListener('click', function () {
     if (state.loadError) return;
@@ -640,11 +721,11 @@
           if (plan.noData.length) h += '<div class="msg warn">以下編號目前還沒有匯入資料，會先記下：' + esc(plan.noData.join('、')) + '</div>';
           if (plan.warnings.length) h += '<div class="msg warn">' + plan.warnings.map(esc).join('<br>') + '</div>';
           if (plan.changes.length) {
-            h += '<table><tr><th>月報編號</th><th>報表編號</th><th class="l">感測器名稱</th></tr>' + plan.changes.map(function (c) {
+            h += fold('mapchg', '<table><tr><th>月報編號</th><th>報表編號</th><th class="l">感測器名稱</th></tr>' + plan.changes.map(function (c) {
               var ridTxt = c.oldRid === c.rid ? esc(c.rid) : '<s>' + esc(c.oldRid) + '</s> → <b>' + esc(c.rid) + '</b>';
               var nmTxt = c.oldName === c.name ? esc(c.name) : '<s>' + esc(c.oldName) + '</s> → <b>' + esc(c.name) + '</b>';
               return '<tr><td>' + esc(c.src) + '</td><td>' + ridTxt + '</td><td class="l">' + nmTxt + '</td></tr>';
-            }).join('') + '</table>';
+            }).join('') + '</table>', plan.changes.length, '台要修改', 25);
             h += '<div class="row"><button id="mapYes" class="primary" type="button">確認套用</button><button id="mapNo" type="button">取消</button></div>';
             mapPending = plan;
           }
@@ -1319,6 +1400,7 @@
     all.forEach(function (g) { c[g.kind]++; hc[g.kind] += g.hours; });
     $('gpSummary').innerHTML = '<div class="msg ' + (c.month || c.missing ? 'warn' : 'info') + '">整月沒有資料 <b>' + c.month + '</b> 段、缺少小時 <b>' + c.missing + '</b> 段（' + hc.missing + ' 小時）、測值空白或無效 <b>' + c.blank + '</b> 段（' + hc.blank + ' 小時）。' +
       (c.month || c.missing ? '「整月沒有資料」「缺少小時」請確認是不是漏匯入或月報本身就缺；要補的話重新匯入該月月報即可。感測器已撤掉或當時還沒裝的，請到「⑤ 感測器編號與名稱」設定停用日／啟用日，就不會再列出。' : '沒有缺少的月份或小時。') + '</div>';
+    $('gpSum').textContent = ($('gpBox').open ? '收合清單' : '展開清單') + '（' + all.length + ' 段）';
     if (!list.length) { $('gpList').innerHTML = '<p class="hint">沒有符合條件的資料。</p>'; return; }
     var LIMIT = 300;
     $('gpList').innerHTML = '<table><tr><th>類型</th><th>感測器</th><th>時間</th><th>小時</th><th class="l">測項</th><th class="l">月報備註</th></tr>' + list.slice(0, LIMIT).map(function (g) {
@@ -1328,6 +1410,7 @@
     }).join('') + '</table>' + (list.length > LIMIT ? '<p class="msg warn">共 ' + list.length + ' 段，只列出前 ' + LIMIT + ' 段，請用上方篩選。</p>' : '');
   }
   ['gpKind', 'gpSensor', 'gpMonth'].forEach(function (id) { $(id).addEventListener('change', renderGaps); });
+  $('gpBox').addEventListener('toggle', function () { $('gpSum').textContent = ($('gpBox').open ? '收合清單' : '展開清單') + '（' + gaps().length + ' 段）'; });
   function pmRuleCounts() {
     var zero = 0, ratio = 0;
     state.chunks.forEach(function (c) {
@@ -1346,25 +1429,31 @@
     var sg = { pending: 0, exclude: 0, keep: 0 }; proc().groups.forEach(function (g) { sg[sgStatus(g)]++; });
     var gp = { month: 0, missing: 0, blank: 0 }, gh = { missing: 0, blank: 0 }; gaps().forEach(function (g) { gp[g.kind]++; if (gh[g.kind] !== undefined) gh[g.kind] += g.hours; });
     var pm = pmRuleCounts(), mn = manual().length;
+    function jn(id, n, cls) { $(id).textContent = n ? n : ''; $(id).className = 'jn' + (cls ? ' ' + cls : ''); }
+    jn('jnRv', todo); jn('jnSg', sg.pending, 'w'); jn('jnMn', mn, 'g'); jn('jnGp', gp.month + gp.missing, 'g');
     function item(target, cls, html) { if (!target) return '<div class="ov msg ' + cls + '">' + html + '</div>'; return '<button type="button" class="ov msg ' + cls + '" data-go="' + target + '">' + html + '</button>'; }
     $('ovList').innerHTML =
       item('rvCard', todo ? 'err' : 'ok', '① 月報備註時段：待確認 <b>' + todo + '</b> 筆' + (todo ? '（需要您確認）' : '（都確認完了）')) +
       item('suspectCard', sg.pending ? 'warn' : 'ok', '② 疑似異常（數值不合理）：待確認 <b>' + sg.pending + '</b> 段（目前預設不採用）、已確認不採用 ' + sg.exclude + ' 段、已改回採用 ' + sg.keep + ' 段') +
-      item('gapCard', gp.month || gp.missing ? 'warn' : 'info', '③ 資料缺漏：整月沒有資料 <b>' + gp.month + '</b> 段、缺少小時 <b>' + gp.missing + '</b> 段（' + gh.missing + ' 小時）；測值空白或無效 ' + gp.blank + ' 段（' + gh.blank + ' 小時，自動不計）') +
+      item('mnCard', 'info', '③ 手動不採用時段：' + mn + ' 段') +
       item('', 'info', '④ 自動不計的測值：PM 為 0 共 ' + pm.zero + ' 小時、PM2.5 大於 PM10 共 ' + pm.ratio + ' 小時（兩者不計）。這兩項可在「④ 產出報表」取消勾選。') +
-      item('mnCard', 'info', '⑤ 手動不採用時段：' + mn + ' 段');
+      item('gapCard', gp.month || gp.missing ? 'warn' : 'info', '⑤ 資料缺漏（清單在頁面最下方，預設收合）：整月沒有資料 <b>' + gp.month + '</b> 段、缺少小時 <b>' + gp.missing + '</b> 段（' + gh.missing + ' 小時）；測值空白或無效 ' + gp.blank + ' 段（' + gh.blank + ' 小時，自動不計）');
+
   }
   $('ovList').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-go]'); if (b) $(b.dataset.go).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    var b = e.target.closest('[data-go]'); if (!b) return;
+    setFold($(b.dataset.go), false);
+    if (b.dataset.go === 'gapCard') $('gpBox').open = true;
+    jumpTo($(b.dataset.go));
   });
   function renderManualList() {
     var list = manual();
     if (!list.length) { $('mnList').innerHTML = '<p class="hint">尚未設定。</p>'; return; }
-    $('mnList').innerHTML = '<table><tr><th>感測器</th><th>從</th><th>到</th><th>測項</th><th class="l">原因</th><th>影響</th><th></th></tr>' + list.map(function (m) {
+    $('mnList').innerHTML = fold('mnlist', '<table><tr><th>感測器</th><th>從</th><th>到</th><th>測項</th><th class="l">原因</th><th>影響</th><th></th></tr>' + list.map(function (m) {
       var imp = M.manualImpact(state.chunks, m);
       return '<tr><td>' + esc(m.id) + '<br><span class="hint">' + esc(sensorName(m.id)) + '</span></td><td>' + fmtTs(m.from) + '</td><td>' + fmtTs(m.to) + '</td><td>' + m.fields.map(function (f) { return LABEL[f]; }).join('、') +
         '</td><td class="l">' + esc(m.reason || '') + '</td><td>' + imp.hours + ' 小時</td><td><button data-del="' + esc(m.uid) + '">刪除</button><span class="delc" data-for="' + esc(m.uid) + '" hidden> 確定刪除？<button class="danger" data-delyes="' + esc(m.uid) + '">確定</button><button data-delno="1">取消</button></span></td></tr>';
-    }).join('') + '</table>';
+    }).join('') + '</table>', list.length, '段', 10);
   }
   $('mnList').addEventListener('click', function (e) {
     var t = e.target;
