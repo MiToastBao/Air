@@ -73,6 +73,20 @@
     ws.getColumn(3).numFmt = 'yyyy/mm/dd';
     for (var c = 4; c <= 9; c++) ws.getColumn(c).numFmt = '0.0';
     if (opts.includeRain) ws.getColumn(11).numFmt = '0.0';
+    // 超過空氣品質標準的日平均：粗體＋底線（直接設定在儲存格上，複製貼到報告也會保留）
+    var std = opts.std || {};
+    var over = 0;
+    rows.forEach(function (r, i) {
+      var row = ws.getRow(i + 2);
+      [['PM10', 6], ['PM25', 7]].forEach(function (x) {
+        var lim = std[x[0]];
+        if (typeof lim === 'number' && isFinite(lim) && typeof r[x[0]] === 'number' && r[x[0]] > lim) {
+          row.getCell(x[1]).font = { bold: true, underline: true };
+          over++;
+        }
+      });
+    });
+    wb.overCount = over;
     var widths = [12, 16, 12, 9, 9, 9, 9, 9, 9, 14];
     if (opts.includeRain) widths.push(12);
     widths.push(40);

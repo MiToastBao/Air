@@ -23,7 +23,8 @@
       if (b.dataset.tab === 'data') renderCoverage();
       if (b.dataset.tab === 'report') updateRangeInfo();
       if (b.dataset.tab === 'names') renderNames();
-      if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); }
+      if (b.dataset.tab === 'backup') refreshStorage();
+      if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); renderSuspects(); renderAutoForm(); }
     });
   });
 
@@ -37,19 +38,84 @@
     lockWrites();
   }
   function lockWrites() {
-    ['fileInput', 'delBtn', 'saveNames', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
+    ['fileInput', 'delBtn', 'saveNames', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm', 'clrProj', 'clrAll', 'projNew', 'projDel', 'autoSave'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
   }
 
   function reload() {
     return Store.loadAll().then(function (d) {
+      procCache = null;
       state.chunks = d.chunks; state.sensors = d.sensors;
       state.meta = {}; d.meta.forEach(function (m) { state.meta[m.key] = m.value; });
       applySettings();
-      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters(); fillManualForm();
+      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters(); fillManualForm(); refreshSuspectBadge();
+      if (!$('tab-backup').hidden) refreshStorage();
     });
   }
 
-  Store.open().then(reload).catch(function (e) { fatal(e && e.message ? e.message : String(e)); });
+  Store.open().then(function () { return renderProjects(); }).then(reload).then(function () { refreshStorage(); autoPersist(); })
+    .catch(function (e) { fatal(e && e.message ? e.message : String(e)); });
+
+  // ---------------- 計畫 ----------------
+  var projList = [];
+  function projLabel(p) { return (p.code ? p.code + '　' : '') + (p.name || '（未命名）'); }
+  function renderProjects() {
+    return Store.listProjects().then(function (list) {
+      projList = list;
+      var cur = Store.current();
+      $('projSel').innerHTML = list.map(function (p) { return '<option value="' + esc(p.uid) + '">' + esc(projLabel(p)) + '</option>'; }).join('');
+      if (cur) $('projSel').value = cur.uid;
+      $('projCur').innerHTML = cur ? '目前計畫：<b>' + esc(cur.code || '（未設編號）') + '</b>　' + esc(cur.name || '（未命名）') + '　<span class="hint">各計畫的資料、確認結果與設定彼此獨立</span>' : '';
+      document.title = (cur && cur.code ? cur.code + ' ' : '') + '環境監測季報產生器';
+    });
+  }
+  function resetViews() {
+    state.pending = null; $('importPreview').innerHTML = ''; $('reviewResult').innerHTML = ''; $('mnResult').innerHTML = ''; $('sgMsg').innerHTML = '';
+    $('reportMsg').innerHTML = ''; $('mapPreview').innerHTML = ''; $('namesMsg').innerHTML = ''; $('restoreMsg').innerHTML = ''; $('clrMsg').innerHTML = '';
+    draft = {}; selected = {}; noteOff = {};
+    ['rvSensor', 'rvMonth', 'sgSensor', 'sgRule'].forEach(function (id) { $(id).value = ''; });
+    $('qYear').value = ''; $('dFrom').value = ''; $('dTo').value = '';
+  }
+  function switchTo(p) {
+    return Store.openProject(p).then(function () { resetViews(); return renderProjects(); }).then(reload).then(function () {
+      var tab = document.querySelector('.tabs button.on'); if (tab) tab.click();
+    });
+  }
+  $('projSel').addEventListener('change', function () {
+    var p = projList.filter(function (x) { return x.uid === $('projSel').value; })[0];
+    if (p) switchTo(p).catch(function (e) { fatal(e.message || e); });
+  });
+  var projMode = null;
+  function openProjForm(mode) {
+    projMode = mode; var cur = Store.current();
+    $('projFormTitle').textContent = mode === 'new' ? '新增計畫' : '修改計畫編號／名稱';
+    $('projCode').value = mode === 'new' ? '' : (cur.code || ''); $('projName').value = mode === 'new' ? '' : (cur.name || '');
+    $('projMsg').innerHTML = ''; $('projForm').hidden = false; $('projDelBox').hidden = true; $('projCode').focus();
+  }
+  $('projNew').addEventListener('click', function () { openProjForm('new'); });
+  $('projEdit').addEventListener('click', function () { openProjForm('edit'); });
+  $('projCancel').addEventListener('click', function () { $('projForm').hidden = true; });
+  $('projSave').addEventListener('click', function () {
+    var code = $('projCode').value.trim(), name = $('projName').value.trim();
+    if (!code || !name) { $('projMsg').innerHTML = '<span class="msg err">計畫編號與名稱都要填。</span>'; return; }
+    var dup = projList.filter(function (p) { return p.code === code && (projMode === 'new' || p.uid !== Store.current().uid); });
+    if (dup.length) { $('projMsg').innerHTML = '<span class="msg err">已經有編號「' + esc(code) + '」的計畫了。</span>'; return; }
+    var job = projMode === 'new'
+      ? Store.createProject(code, name).then(function (p) { return switchTo(p); })
+      : (function () { var p = Object.assign({}, Store.current(), { code: code, name: name }); return Store.updateProject(p).then(function () { return Store.openProject(p); }).then(renderProjects); })();
+    job.then(function () { $('projForm').hidden = true; }).catch(function (e) { $('projMsg').innerHTML = '<span class="msg err">' + esc(e.message || e) + '</span>'; });
+  });
+  $('projDel').addEventListener('click', function () {
+    $('projDelName').textContent = projLabel(Store.current()); $('projDelBox').hidden = false; $('projForm').hidden = true;
+  });
+  $('projDelNo').addEventListener('click', function () { $('projDelBox').hidden = true; });
+  $('projDelYes').addEventListener('click', function () {
+    var p = Store.current();
+    Store.removeProject(p).then(function () { return Store.listProjects(); }).then(function (list) {
+      $('projDelBox').hidden = true;
+      if (list.length) return switchTo(list[0]);
+      return Store.open().then(function () { resetViews(); return renderProjects(); }).then(reload);
+    }).catch(function (e) { fatal(e.message || e); });
+  });
 
   // ---------------- ① 匯入 ----------------
   var drop = $('drop');
@@ -157,6 +223,15 @@
       if (inv.length) {
         html += '<details><summary>非有效資料（負值、空白、文字）筆數：' + inv.length + ' 台感測器有</summary><ul class="issues">' +
           inv.map(function (x) { return '<li class="info">' + esc(x) + '</li>'; }).join('') + '</ul></details>';
+      }
+      if (!res.blocked && res.sensors.length) {
+        var sg = M.detectSuspects(res.sensors.map(function (x) { return { id: x.id, name: x.id, fields: x.fields, rows: x.rows }; }), repOpts());
+        if (sg.length) {
+          var hrs = sg.reduce(function (a, g) { return a + g.hits; }, 0), byR = {};
+          sg.forEach(function (g) { byR[g.label.split('，')[0].split('（')[0]] = (byR[g.label.split('，')[0].split('（')[0]] || 0) + 1; });
+          html += '<div class="msg warn">發現 <b>' + sg.length + '</b> 段疑似異常（共 ' + hrs + ' 小時）：' + esc(Object.keys(byR).map(function (k) { return k + ' ' + byR[k] + ' 段'; }).join('、')) +
+            '。匯入後預設不採用，請到「② 備註時段確認」的「疑似異常時段」逐段確認。</div>';
+        }
       }
       var iss = res.issues.filter(function (x) { return x.level !== 'info'; });
       var info = res.issues.filter(function (x) { return x.level === 'info'; });
@@ -275,7 +350,7 @@
     });
   });
   ['qYear', 'qNum', 'mFrom', 'mTo', 'dFrom', 'dTo'].forEach(function (id) { $(id).addEventListener('change', updateRangeInfo); $(id).addEventListener('input', updateRangeInfo); });
-  ['optRain', 'optFill', 'optPmZero', 'optPmRatio'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
+  ['optRain', 'optFill', 'optPmZero', 'optPmRatio', 'stdPM10', 'stdPM25'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
 
   function currentRange() {
     var md = mode();
@@ -340,7 +415,7 @@
     var old = btn.textContent;
     btn.disabled = true; btn.textContent = '產生中…';
     paint().then(function () {
-      var sensors = applyAll(M.sensorsFromChunks(state.chunks, state.sensors, r), review(), manual());
+      var sensors = proc().sensors;
       var rep = Core.buildReports(sensors, r, {
         fillMissingDays: $('optFill').checked,
         importedMonths: allMonths(),
@@ -349,15 +424,18 @@
       var rows = (kind === 'air' ? rep.air : rep.noise).map(function (x) { x.id = reportId(x.id); return x; });
       rows.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
       if (!rows.length) throw new Error(kind === 'air' ? '這個期間沒有空品資料。' : '這個期間沒有噪音資料。');
-      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked }) : X.buildNoiseWorkbook(ExcelJS, rows);
+      var std = stdValues();
+      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked, std: std }) : X.buildNoiseWorkbook(ExcelJS, rows);
       return wb.xlsx.writeBuffer().then(function (buf) {
-        var name = (kind === 'air' ? '空氣品質日均報表_' : '噪音Leq日晚夜報表_') + r.label + '_' + stamp() + '.xlsx';
+        var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : '';
+        var name = pc + (kind === 'air' ? '空氣品質日均報表_' : '噪音Leq日晚夜報表_') + r.label + '_' + stamp() + '.xlsx';
         download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name);
         var sensorsN = {};
         rows.forEach(function (x) { sensorsN[x.id] = true; });
         var noData = rows.filter(function (x) { return x.note.indexOf('當日無資料') === 0; }).length;
         $('reportMsg').innerHTML = '<div class="msg ok">已下載「' + esc(name) + '」：' + Object.keys(sensorsN).length + ' 台感測器、' + rows.length + ' 列' +
-          (noData ? '（其中 ' + noData + ' 列當日無資料）' : '') + '。</div>';
+          (noData ? '（其中 ' + noData + ' 列當日無資料）' : '') + '。' +
+          (kind === 'air' ? '超過標準（PM10 &gt; ' + std.PM10 + '、PM2.5 &gt; ' + std.PM25 + '）的日平均共 ' + (wb.overCount || 0) + ' 格，已設為粗體＋底線。' : '') + '</div>';
       });
     }).catch(function (e) {
       $('reportMsg').innerHTML = '<div class="msg err">' + esc(e.message || e) + '</div>';
@@ -379,11 +457,16 @@
     if (typeof s.fill === 'boolean') $('optFill').checked = s.fill;
     if (typeof s.pmZero === 'boolean') $('optPmZero').checked = s.pmZero;
     if (typeof s.pmRatio === 'boolean') $('optPmRatio').checked = s.pmRatio;
+    var sd = stdValues(); $('stdPM10').value = sd.PM10; $('stdPM25').value = sd.PM25;
   }
   function saveSettings() {
     if (state.loadError) return;
-    var v = { rain: $('optRain').checked, fill: $('optFill').checked, pmZero: $('optPmZero').checked, pmRatio: $('optPmRatio').checked };
-    state.meta.settings = v;
+    var v = {}; Object.keys(settings()).forEach(function (k) { v[k] = settings()[k]; }); // 保留門檻、標準值等其他設定
+    v.rain = $('optRain').checked; v.fill = $('optFill').checked; v.pmZero = $('optPmZero').checked; v.pmRatio = $('optPmRatio').checked;
+    var a = Number($('stdPM10').value), b = Number($('stdPM25').value);
+    v.std = { PM10: $('stdPM10').value !== '' && isFinite(a) ? a : 75, PM25: $('stdPM25').value !== '' && isFinite(b) ? b : 30 };
+    state.meta.settings = v; procCache = null;
+    refreshSuspectBadge();
     Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).catch(function () {});
   }
 
@@ -503,6 +586,34 @@
   function review() { return state.meta.review || {}; }
   function manual() { return state.meta.manual || []; }
   function applyAll(base, rev, man) { return M.applyManual(M.applyExclusions(base, rev), man); }
+  function settings() { return state.meta.settings || {}; }
+  function suspectDec() {
+    var d = state.meta.suspect || {};
+    var ig = state.meta.suspectIgnore; // v1.3.0 的「這是真實數值」→ 採用
+    if (ig) { d = Object.assign({}, d); Object.keys(ig).forEach(function (k) { if (!d[k]) d[k] = 'keep'; }); }
+    return d;
+  }
+  function stdValues() {
+    var sd = settings().std || {};
+    return { PM10: typeof sd.PM10 === 'number' ? sd.PM10 : 75, PM25: typeof sd.PM25 === 'number' ? sd.PM25 : 30 };
+  }
+  function safeName(t) { return String(t).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40); }
+  function repOpts() { return { zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked, auto: settings().auto }; }
+  /** 全部資料跑完整流程（備註確認 → 手動 → 疑似異常自動判定）；結果快取到下一次重新載入 */
+  var procCache = null;
+  function proc() {
+    if (!procCache) {
+      procCache = M.processAll(M.sensorsFromChunks(state.chunks, state.sensors, null), review(), manual(), repOpts(), suspectDec());
+      var am = {};
+      procCache.sensors.forEach(function (x) { x.rows.forEach(function (r) { if (r.af) am[x.id + '|' + r.ts] = r.af; }); });
+      procCache.autoMap = am;
+    }
+    return procCache;
+  }
+  /** 單一感測器、指定的確認狀態下的完整流程（重新計算前後比較用） */
+  function procOne(id, rev, man, dec) {
+    return M.processAll(M.sensorsFromChunks(state.chunks.filter(function (c) { return c.id === id; }), state.sensors, null), rev, man, repOpts(), dec).sensors;
+  }
   function reviewHint() {
     var n = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
     return n ? '<br><b>有 ' + n + ' 個備註時段需要確認</b>，請到「② 備註時段確認」。' : '';
@@ -553,6 +664,7 @@
     $('rvMonth').value = byM[keepM] ? keepM : '';
     return { resetS: resetS, resetM: resetM };
   }
+  $('rvActiveOnly').addEventListener('change', function () { renderReview(); });
   ['rvStatus', 'rvSensor', 'rvMonth'].forEach(function (id) { $(id).addEventListener('change', function () { $('reviewResult').innerHTML = ''; $('rvBulkMsg').innerHTML = ''; fillReviewFilters(); renderReview(); }); });
 
   var shown = [];
@@ -578,7 +690,13 @@
     if ($('optPmZero').checked && (a === 0 || b === 0)) return false;
     return b > a;
   }
-  function editable(it, f) { return it.validFields.indexOf(f) >= 0 && !isPmZero(it, f) && !isPmRatio(it, f); }
+  function autoOf(it, f) { var m = proc().autoMap; return !!(m[it.key] && m[it.key].indexOf(f) >= 0); }
+  function editable(it, f) { return it.validFields.indexOf(f) >= 0 && !isPmZero(it, f) && !isPmRatio(it, f) && !autoOf(it, f); }
+  /** 這一列還有沒有「採用中」的數值（可編輯、而且沒有勾不採用） */
+  function hasActive(it, only) {
+    var ex = draft[it.key] || it.exclude;
+    return it.validFields.some(function (f) { return (!only || f === only) && editable(it, f) && ex.indexOf(f) < 0; });
+  }
 
   function renderNoteFilter(base) {
     var cnt = {}, order = [];
@@ -601,7 +719,8 @@
     var base = baseFiltered(all);
     renderNoteFilter(base);
     var st = $('rvStatus').value;
-    var filtered = base.filter(function (it) { return !noteOff[it.note]; });
+    var af = $('rvActiveOnly').value; // ''＝不篩選、'ANY'＝任一測項、其他＝指定測項
+    var filtered = base.filter(function (it) { return !noteOff[it.note] && (!af || hasActive(it, af === 'ANY' ? null : af)); });
     var LIMIT = 1000;
     var list = filtered.slice(0, LIMIT);
     shown = list;
@@ -629,6 +748,7 @@
         var v = it.v[f];
         if (v === null || v === undefined) { h += '<td class="val"><span class="hint">異常值<br>（已不計）</span></td>'; return; }
         if (isPmZero(it, f)) { h += '<td class="val"><span class="v">0</span><span class="hint">PM 為 0<br>已不計</span></td>'; return; }
+        if (autoOf(it, f)) { h += '<td class="val"><span class="v">' + esc(v) + '</span><span class="hint">自動判定異常<br>已不計</span></td>'; return; }
         if (isPmRatio(it, f)) { h += '<td class="val"><span class="v">' + esc(v) + '</span><span class="hint">PM2.5&gt;PM10<br>已不計</span></td>'; return; }
         var x = ex.indexOf(f) >= 0;
         h += '<td class="val' + (x ? ' x' : '') + '"><span class="v">' + esc(v) + '</span><label><input type="checkbox" data-f="' + f + '"' + (x ? ' checked' : '') + '> 不採用</label></td>';
@@ -761,18 +881,18 @@
   });
 
   /** 比較確認前後，受影響的感測器日各項數值 */
-  function recalcDiff(dayKeys, before, after, manBefore, manAfter) {
+  function recalcDiff(dayKeys, before, after, manBefore, manAfter, decBefore, decAfter) {
     if (manBefore === undefined) { manBefore = manual(); manAfter = manual(); }
+    if (decBefore === undefined) { decBefore = suspectDec(); decAfter = suspectDec(); }
     var out = [];
-    var opts = { fillMissingDays: false, zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked };
+    var opts = repOpts(); opts.fillMissingDays = false;
     var bySensor = {};
     dayKeys.forEach(function (k) { var p = k.split('|'); (bySensor[p[0]] = bySensor[p[0]] || []).push(p[1]); });
     Object.keys(bySensor).forEach(function (id) {
       var ds = bySensor[id].sort();
       var range = { from: ds[0], to: ds[ds.length - 1] };
-      var base = M.sensorsFromChunks(state.chunks.filter(function (c) { return c.id === id; }), state.sensors, range);
-      var A = Core.buildReports(applyAll(base, before, manBefore), range, opts);
-      var B = Core.buildReports(applyAll(base, after, manAfter), range, opts);
+      var A = Core.buildReports(procOne(id, before, manBefore, decBefore), range, opts);
+      var B = Core.buildReports(procOne(id, after, manAfter, decAfter), range, opts);
       ['air', 'noise'].forEach(function (kind) {
         var bmap = {}; B[kind].forEach(function (r) { bmap[r.date] = r; });
         A[kind].forEach(function (ra) {
@@ -796,6 +916,157 @@
     }
     $(target || 'reviewResult').innerHTML = h;
   }
+
+  // ---------------- 疑似異常時段（自動判定，預設不採用） ----------------
+  var RULE_ADV = {
+    LEQ999: '999 通常是儀器的錯誤碼，不是真的量到 999 dB。',
+    LEQHIGH: '這麼高的音量接近飛機起飛近距離，工地或道路旁也很少連續出現。',
+    LEQLOW: '比深夜郊區還安靜，可能是儀器沒有正常收音。',
+    PMCAP: '數值停在儀器上限附近，通常代表感測器飽和或故障，實際濃度無法得知。同一台的 PM10 與 PM2.5 通常一起受影響，所以兩個測項一起不採用。',
+    HUM100: '相對濕度最大是 100%，些微超過可能是感測器誤差；若只超過一點點、時間很短，可以改回採用（視為接近飽和）。',
+    TMPRANGE: '超出台灣一般環境的溫度範圍，可能是感測器故障。',
+    WSHIGH: '這個風速已達強烈颱風等級，若當時沒有颱風，多半是感測器異常。',
+    WDBAD: '風向角度只會在 0～360 度之間。',
+    RAHIGH: '一小時雨量這麼大極少見，若當時沒有豪雨，多半是雨量計異常。',
+    STUCK: '真實環境的數值每小時都會有些變化，同一個數字連續十幾個小時不變，常見原因是感測器卡住或通訊中斷後重複送出最後一筆。'
+  };
+  function sgStatus(g) { var d = suspectDec()[g.key]; return d === 'keep' ? 'keep' : d === 'exclude' ? 'exclude' : 'pending'; }
+  function refreshSuspectBadge() {
+    setTimeout(function () {
+      var n = proc().groups.filter(function (g) { return sgStatus(g) === 'pending'; }).length;
+      $('suspectBadge').hidden = !n; $('suspectBadge').textContent = '異常 ' + n;
+      $('suspectBadge').title = n + ' 段疑似異常時段待確認（預設不採用）';
+      if (!$('tab-review').hidden) renderSuspects();
+    }, 30);
+  }
+  function fmtV(v) { return v === null || v === undefined ? '（空白）' : esc(v); }
+  /** 這一段「不採用（目前預設）」與「採用」時，報表日平均的差別 */
+  function suspectImpact(g) {
+    var range = { from: g.from.slice(0, 10), to: g.to.slice(0, 10) };
+    var opts = repOpts(); opts.fillMissingDays = false;
+    var ex = {}, keep = {};
+    Object.keys(suspectDec()).forEach(function (k) { ex[k] = keep[k] = suspectDec()[k]; });
+    ex[g.key] = 'exclude'; keep[g.key] = 'keep';
+    var A = Core.buildReports(procOne(g.id, review(), manual(), keep), range, opts);
+    var B = Core.buildReports(procOne(g.id, review(), manual(), ex), range, opts);
+    var out = [];
+    ['air', 'noise'].forEach(function (kind) {
+      var bm = {}; B[kind].forEach(function (r) { bm[r.date] = r; });
+      var F = kind === 'air' ? [['TMP', 'TMP'], ['HUM', 'HUM'], ['PM10', 'PM10'], ['PM25', 'PM2.5'], ['TVOC', 'TVOC'], ['WS', 'WS'], ['WD', '最頻風向'], ['RA', '雨量']] : [['DAY', 'Leq日'], ['EVE', 'Leq晚'], ['NIGHT', 'Leq夜']];
+      A[kind].forEach(function (ra) { var rb = bm[ra.date]; F.forEach(function (f) { if (rb && ra[f[0]] !== rb[f[0]]) out.push([ra.date, f[1], ra[f[0]], rb[f[0]]]); }); });
+    });
+    return out;
+  }
+  function fillSuspectFilters(list) {
+    var ks = $('sgSensor').value, kr = $('sgRule').value, bs = {}, br = {}, lab = {};
+    list.forEach(function (g) { bs[g.id] = (bs[g.id] || 0) + 1; br[g.rule] = (br[g.rule] || 0) + 1; lab[g.rule] = g.label; });
+    $('sgSensor').innerHTML = '<option value="">全部（' + list.length + '）</option>' + Object.keys(bs).sort().map(function (id) { return '<option value="' + esc(id) + '">' + esc(id + ' ' + sensorName(id)) + '（' + bs[id] + '）</option>'; }).join('');
+    $('sgRule').innerHTML = '<option value="">全部</option>' + Object.keys(br).map(function (r) { return '<option value="' + r + '">' + esc(lab[r].split('，')[0].split('（')[0]) + '（' + br[r] + '）</option>'; }).join('');
+    $('sgSensor').value = bs[ks] ? ks : ''; $('sgRule').value = br[kr] ? kr : '';
+  }
+  var sgShown = [];
+  function renderSuspects() {
+    var groups = proc().groups, st = $('sgStatus').value;
+    var list = groups.filter(function (g) { return st === 'all' || sgStatus(g) === st; });
+    fillSuspectFilters(list);
+    var fs = $('sgSensor').value, fr = $('sgRule').value;
+    sgShown = list.filter(function (g) { return (!fs || g.id === fs) && (!fr || g.rule === fr); });
+    var cnt = { pending: 0, exclude: 0, keep: 0 };
+    groups.forEach(function (g) { cnt[sgStatus(g)]++; });
+    $('sgSummary').innerHTML = '<div class="msg ' + (cnt.pending ? 'warn' : 'ok') + '">待確認 <b>' + cnt.pending + '</b> 段（目前預設不採用）、已確認不採用 ' + cnt.exclude + ' 段、已改回採用 ' + cnt.keep + ' 段。</div>';
+    $('sgBatch').hidden = !sgShown.length;
+    $('sgBatchN').textContent = sgShown.length;
+    if (!sgShown.length) { $('sgList').innerHTML = '<p class="hint">' + (st === 'pending' ? '沒有待確認的疑似異常時段。' : '沒有符合條件的時段。') + '</p>'; return; }
+    var LIMIT = 60;
+    $('sgList').innerHTML = sgShown.slice(0, LIMIT).map(function (g) {
+      var stt = sgStatus(g);
+      var imp = suspectImpact(g);
+      var fl = g.fields.map(function (f) { return LABEL[f]; }).join('、');
+      var range = g.from === g.to ? fmtTs(g.from) : fmtTs(g.from) + ' ～ ' + fmtTs(g.to);
+      var vr = g.min === g.max ? '數值 ' + g.min : '數值 ' + g.min + '～' + g.max;
+      var tag = stt === 'pending' ? '<span class="tag err">待確認・目前不採用</span>' : stt === 'exclude' ? '<span class="tag warn">已確認不採用</span>' : '<span class="tag ok">已改回採用</span>';
+      var h = '<div class="sg' + (stt === 'keep' ? ' ign' : '') + '"><h4>' + esc(g.id) + ' ' + esc(sensorName(g.id)) + '｜' + range + '（' + g.hours + ' 小時）' + tag + '</h4>';
+      h += '<div class="what"><b>狀況：</b>' + esc(g.label) + '。' + (g.hits === g.hours ? '這段 ' + g.hours + ' 小時全部符合' : '範圍內 ' + g.hours + ' 小時中有 ' + g.hits + ' 小時符合（只有符合的小時會不採用；中間相隔 3 小時以內的合併成一段顯示）') + '，' + vr + '。' +
+        (g.noted ? '其中 ' + g.noted + ' 小時月報有寫備註。' : '月報這段沒有寫備註。') + '</div>';
+      h += '<div class="what">' + esc(RULE_ADV[g.rule] || '') + '</div>';
+      if (imp.length) {
+        h += '<div class="imp"><b>' + fl + ' 採用與不採用時，報表的差別：</b><table><tr><th>日期</th><th>項目</th><th>採用時</th><th>不採用時</th></tr>' + imp.slice(0, 8).map(function (d) {
+          return '<tr><td>' + Core.toRoc(d[0]) + '</td><td>' + esc(d[1]) + '</td><td>' + fmtV(d[2]) + '</td><td><b>' + fmtV(d[3]) + '</b></td></tr>';
+        }).join('') + '</table>' + (imp.length > 8 ? '<span class="hint">…另有 ' + (imp.length - 8) + ' 個數值不同</span>' : '') + '</div>';
+      } else h += '<div class="imp hint">這段採用或不採用，報表的日平均都一樣（四捨五入後相同）。</div>';
+      if (stt !== 'keep') h += '<div class="adv"><b>建議：</b>' + (stt === 'pending' ? '系統已先把這段的 ' + fl + ' 設為不採用。' : '') + '如果您確認是儀器異常，按「確認不採用」；如果這是真實狀況（例如附近施工、颱風），按「改回採用」。只有其中幾小時有問題的話，可以先改回採用，再到下方「手動新增不採用時段」只設定有問題的時間。</div>';
+      h += '<div class="row">' + (stt !== 'exclude' ? '<button type="button" class="danger" data-sgset="exclude" data-k="' + esc(g.key) + '">確認不採用</button>' : '') +
+        (stt !== 'keep' ? '<button type="button" data-sgset="keep" data-k="' + esc(g.key) + '">改回採用（這是真實數值）</button>' : '') +
+        (stt !== 'pending' ? '<button type="button" data-sgset="reset" data-k="' + esc(g.key) + '">改回待確認</button>' : '') + '</div>';
+      return h + '</div>';
+    }).join('') + (sgShown.length > LIMIT ? '<p class="msg warn">共 ' + sgShown.length + ' 段，一次列出前 ' + LIMIT + ' 段，請用上方感測器或狀況篩選。「批次」按鈕仍會處理全部 ' + sgShown.length + ' 段。</p>' : '');
+  }
+  ['sgStatus', 'sgSensor', 'sgRule'].forEach(function (id) { $(id).addEventListener('change', function () { $('sgMsg').innerHTML = ''; renderSuspects(); }); });
+  function setSuspect(keys, val, msgEl) {
+    if (state.loadError || !keys.length) return;
+    var before = suspectDec(), after = {};
+    Object.keys(before).forEach(function (k) { after[k] = before[k]; });
+    keys.forEach(function (k) { if (val === 'reset') delete after[k]; else after[k] = val; });
+    var groups = proc().groups.filter(function (g) { return keys.indexOf(g.key) >= 0; });
+    var days = {};
+    groups.forEach(function (g) { M.monthsInRange({ from: g.from.slice(0, 10), to: g.to.slice(0, 10) }); Core.daysBetween(g.from.slice(0, 10), g.to.slice(0, 10)).forEach(function (d) { days[g.id + '|' + d] = true; }); });
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'suspect', value: after } }]).then(function () {
+      var diff = recalcDiff(Object.keys(days), review(), review(), manual(), manual(), before, after);
+      return reload().then(function () {
+        renderSuspects();
+        showRecalc(diff, Object.keys(days).length, msgEl, (val === 'keep' ? '已改回採用 ' : val === 'exclude' ? '已確認不採用 ' : '已改回待確認 ') + keys.length + ' 段，重新計算');
+      });
+    }).catch(function (er) { $(msgEl).innerHTML = '<div class="msg err">儲存失敗：' + esc(er.message || er) + '</div>'; });
+  }
+  $('sgList').addEventListener('click', function (e) {
+    var t = e.target; if (!t.dataset.sgset) return;
+    setSuspect([t.dataset.k], t.dataset.sgset, 'sgMsg');
+    $('sgMsg').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  $('sgAllX').addEventListener('click', function () { setSuspect(sgShown.map(function (g) { return g.key; }), 'exclude', 'sgMsg'); });
+  $('sgAllK').addEventListener('click', function () { setSuspect(sgShown.map(function (g) { return g.key; }), 'keep', 'sgMsg'); });
+
+  // 門檻設定
+  var AUTO_FORM = [
+    ['LEQ999', 'Leq 錯誤碼：大於等於', 'v', 'dB'], ['LEQHIGH', 'Leq 過高：大於', 'v', 'dB'], ['LEQLOW', 'Leq 過低：小於', 'v', 'dB'],
+    ['PMCAP', 'PM10／PM2.5 接近儀器上限：大於等於', 'v', 'μg/m³'], ['HUM100', '濕度：大於', 'v', '%'],
+    ['TMPRANGE', '溫度：低於', 'lo', '℃，或高於', 'hi', '℃'], ['WSHIGH', '風速：大於', 'v', 'm/s'], ['WDBAD', '風向：大於', 'v', '度'],
+    ['RAHIGH', '時雨量：大於', 'v', 'mm'], ['STUCK', 'PM10、PM2.5、TVOC、濕度同值連續：大於等於', 'v', '小時']
+  ];
+  function renderAutoForm() {
+    var c = M.autoCfg(settings().auto);
+    $('autoForm').innerHTML = AUTO_FORM.map(function (x) {
+      var k = x[0], h = '<div class="row"><label><input type="checkbox" data-ak="' + k + '" data-af="on"' + (c[k].on ? ' checked' : '') + '> ' + esc(x[1]) + '</label> ';
+      h += '<input type="number" step="any" class="num" data-ak="' + k + '" data-af="' + x[2] + '" value="' + esc(c[k][x[2]]) + '"> ' + esc(x[3]);
+      if (x[4]) h += ' <input type="number" step="any" class="num" data-ak="' + k + '" data-af="' + x[4] + '" value="' + esc(c[k][x[4]]) + '"> ' + esc(x[5]);
+      return h + '</div>';
+    }).join('');
+  }
+  $('autoSave').addEventListener('click', function () {
+    if (state.loadError) return;
+    var auto = {}, bad = [];
+    $('autoForm').querySelectorAll('[data-ak]').forEach(function (el) {
+      var k = el.dataset.ak, f = el.dataset.af;
+      auto[k] = auto[k] || {};
+      if (f === 'on') auto[k].on = el.checked;
+      else { var v = Number(el.value); if (el.value === '' || !isFinite(v)) bad.push(k); else auto[k][f] = v; }
+    });
+    if (bad.length) { $('autoMsg').innerHTML = '<span class="msg err">有門檻沒有填數字，請檢查。</span>'; return; }
+    if (auto.STUCK.v < 2) { $('autoMsg').innerHTML = '<span class="msg err">同值連續小時至少要 2。</span>'; return; }
+    var v = {}; Object.keys(settings()).forEach(function (k) { v[k] = settings()[k]; }); v.auto = auto;
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).then(reload).then(function () {
+      renderAutoForm(); renderSuspects();
+      $('autoMsg').innerHTML = '<span class="msg ok">已儲存並重新判定。門檻改變後段落範圍可能不同，新出現的段落會列為待確認。</span>';
+    }).catch(function (er) { $('autoMsg').innerHTML = '<span class="msg err">儲存失敗：' + esc(er.message || er) + '</span>'; });
+  });
+  $('autoReset').addEventListener('click', function () {
+    var c = M.autoCfg(null);
+    $('autoForm').querySelectorAll('[data-ak]').forEach(function (el) {
+      var k = el.dataset.ak, f = el.dataset.af;
+      if (f === 'on') el.checked = c[k].on; else el.value = c[k][f];
+    });
+    $('autoMsg').innerHTML = '<span class="msg info">已填回出廠預設，按「儲存並重新判定」才會生效。</span>';
+  });
 
   // ---------------- 手動新增不採用時段 ----------------
   function sensorFields(id) {
@@ -887,8 +1158,9 @@
   // ---------------- ⑥ 備份 ----------------
   $('backupBtn').addEventListener('click', function () {
     Store.loadAll().then(function (d) {
-      var data = { app: 'env-quarterly-report', version: window.ENV_APP_VERSION, exportedAt: new Date().toISOString(), chunks: d.chunks, sensors: d.sensors, meta: d.meta };
-      download(new Blob([JSON.stringify(data)], { type: 'application/json' }), '環境監測資料備份_' + stamp() + '.json');
+      var cur = Store.current() || {};
+      var data = { app: 'env-quarterly-report', version: window.ENV_APP_VERSION, exportedAt: new Date().toISOString(), project: { code: cur.code || '', name: cur.name || '' }, chunks: d.chunks, sensors: d.sensors, meta: d.meta };
+      download(new Blob([JSON.stringify(data)], { type: 'application/json' }), '環境監測資料備份_' + (cur.code ? safeName(cur.code) + '_' : '') + stamp() + '.json');
     }).catch(function (e) { alertMsg('備份失敗：' + (e.message || e)); });
   });
   $('restoreFile').addEventListener('change', function (e) {
@@ -904,8 +1176,12 @@
       var months = {};
       d.chunks.forEach(function (c) { months[c.month] = true; });
       var rows = d.chunks.reduce(function (a, c) { return a + c.rows.length; }, 0);
-      $('restoreMsg').innerHTML = '<span class="msg warn">備份檔含 ' + Object.keys(months).length + ' 個月、' + rows + ' 筆資料（' + esc(d.exportedAt || '') + '）。' +
-        '還原會取代目前全部資料。 <button id="restoreYes" class="danger">確定還原</button> <button id="restoreNo">取消</button></span>';
+      var cur = Store.current() || {}, bp = d.project || {};
+      var diffP = bp.code !== undefined && (bp.code !== (cur.code || '') || bp.name !== (cur.name || ''));
+      $('restoreMsg').innerHTML = '<span class="msg warn">備份檔含 ' + Object.keys(months).length + ' 個月、' + rows + ' 筆資料（' + esc(d.exportedAt || '') + '）' +
+        (bp.code !== undefined ? '，來自計畫「' + esc((bp.code || '') + ' ' + (bp.name || '')) + '」' : '') + '。' +
+        (diffP ? '<b>與目前計畫「' + esc((cur.code || '') + ' ' + (cur.name || '')) + '」不同，請確認是否還原到目前計畫。</b>' : '') +
+        '還原會取代目前計畫的全部資料。 <button id="restoreYes" class="danger">確定還原</button> <button id="restoreNo">取消</button></span>';
       $('restoreNo').onclick = function () { $('restoreMsg').innerHTML = ''; };
       $('restoreYes').onclick = function () {
         var ops = [{ store: 'chunks', type: 'clear' }, { store: 'sensors', type: 'clear' }, { store: 'meta', type: 'clear' }];
@@ -916,5 +1192,56 @@
           .catch(function (er) { $('restoreMsg').innerHTML = '<span class="msg err">還原失敗，原本的資料沒有變動：' + esc(er.message || er) + '</span>'; });
       };
     }).catch(function (er) { $('restoreMsg').innerHTML = '<span class="msg err">' + esc(er.message || er) + '</span>'; });
+  });
+
+  // ---------------- 儲存空間與清除 ----------------
+  function fmtBytes(n) {
+    if (n === null || n === undefined) return '—';
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    return Math.max(1, Math.round(n / 1024)) + ' KB';
+  }
+  function refreshStorage() {
+    return Promise.all([Store.estimate(), Store.persisted()]).then(function (r) {
+      var e = r[0], ps = r[1], h = '';
+      var rows = state.chunks.reduce(function (a, c) { return a + c.rows.length; }, 0);
+      h += '目前計畫：' + M.coverage(state.chunks).months.length + ' 個月、' + rows.toLocaleString() + ' 筆逐時資料。<br>';
+      if (e && e.quota) {
+        h += '本網站（全部計畫合計）已使用 <b>' + fmtBytes(e.usage) + '</b>，瀏覽器允許上限約 <b>' + fmtBytes(e.quota) + '</b>，還剩約 <b>' + fmtBytes(e.quota - e.usage) + '</b>（已用 ' + (e.usage / e.quota * 100).toFixed(e.usage / e.quota < 0.01 ? 2 : 1) + '%）。';
+        h += '<br><span class="hint">上限是瀏覽器依硬碟剩餘空間估算的，硬碟空間變少時上限也會跟著變小。</span>';
+      } else h += '這個瀏覽器無法查詢儲存空間（例如用本機檔案開啟時）。';
+      h += '<br>持久保存：' + (ps === true ? '<b class="st-c">已開啟</b>（瀏覽器不會自動清掉資料）' : ps === false ? '<b class="st-p">尚未開啟</b>（硬碟空間很緊時，瀏覽器可能自動清掉資料）' : '此瀏覽器不支援查詢');
+      $('storageInfo').innerHTML = h;
+      $('persistBtn').hidden = ps === true;
+    });
+  }
+  function autoPersist() { Store.persisted().then(function (p) { if (p === false) Store.persist().then(refreshStorage); }); }
+  $('storageRefresh').addEventListener('click', refreshStorage);
+  $('persistBtn').addEventListener('click', function () {
+    Store.persist().then(function (ok) {
+      refreshStorage();
+      $('clrMsg').innerHTML = '';
+      $('storageInfo').insertAdjacentHTML('beforeend', ok ? '<div class="msg ok">瀏覽器已同意持久保存。</div>' : '<div class="msg warn">瀏覽器這次沒有同意（Chrome 會依使用情況自動判斷）。把這個網站加入書籤、常用一陣子後可以再按一次；在那之前請定期下載備份。</div>');
+    });
+  });
+  var clrMode = null;
+  $('clrProj').addEventListener('click', function () {
+    clrMode = 'proj'; $('clrBox').hidden = false;
+    $('clrText').innerHTML = '確定要清除計畫「<b>' + esc(projLabel(Store.current())) + '</b>」的全部資料？（匯入的月報、確認結果、感測器名稱、設定都會清除；計畫本身保留）';
+  });
+  $('clrAll').addEventListener('click', function () {
+    clrMode = 'all'; $('clrBox').hidden = false;
+    $('clrText').innerHTML = '確定要清除<b>全部 ' + projList.length + ' 個計畫</b>與所有資料？清除後網站回到剛開始使用的狀態。';
+  });
+  $('clrNo').addEventListener('click', function () { $('clrBox').hidden = true; });
+  $('clrYes').addEventListener('click', function () {
+    if (state.loadError) return;
+    $('clrMsg').innerHTML = '<div class="msg info">清除中…</div>'; $('clrYes').disabled = true;
+    var job = clrMode === 'proj' ? Store.clearProjectData()
+      : Store.removeAll().then(function () { return Store.open(); }).then(function () { return renderProjects(); });
+    job.then(function () { resetViews(); return reload(); }).then(function () {
+      $('clrBox').hidden = true; $('clrYes').disabled = false; refreshStorage();
+      $('clrMsg').innerHTML = '<div class="msg ok">' + (clrMode === 'proj' ? '目前計畫的資料已清除。' : '全部計畫與資料已清除。') + '</div>';
+    }).catch(function (e) { $('clrYes').disabled = false; $('clrMsg').innerHTML = '<div class="msg err">清除失敗：' + esc(e.message || e) + '</div>'; });
   });
 })();

@@ -245,6 +245,7 @@
       if (r.note) o.note = r.note;
       if (r.xf) o.xf = r.xf;
       if (r.mf) o.mf = r.mf;
+      if (r.af) o.af = r.af;
       return o;
     });
     return { rows: out, n: n };
@@ -280,7 +281,7 @@
       rec.hours.WD = vals.WD.length;
       note += '；最頻風向採計' + vals.WD.length + '小時' + (has('WS') ? '（風速>0.3）' : '（無風速欄，全部採計）');
     }
-    rec.note = note + pmNote + exclNote(rows, AIR_FIELDS) + exclNote(rows, AIR_FIELDS, 'mf', '手動不採用') + rawNotes(rows);
+    rec.note = note + pmNote + exclNote(rows, AIR_FIELDS, 'af', '自動判定異常不計') + exclNote(rows, AIR_FIELDS) + exclNote(rows, AIR_FIELDS, 'mf', '手動不採用') + rawNotes(rows);
     return rec;
   }
 
@@ -307,7 +308,7 @@
       id: s.id, name: s.name, date: d,
       DAY: energyMean1(p.DAY), EVE: energyMean1(p.EVE), NIGHT: energyMean1(p.NIGHT),
       hours: { DAY: p.DAY.length, EVE: p.EVE.length, NIGHT: p.NIGHT.length },
-      note: note + exclNote(rows, ['LEQ']) + exclNote(rows, ['LEQ'], 'mf', '手動不採用') + rawNotes(rows)
+      note: note + exclNote(rows, ['LEQ'], 'af', '自動判定異常不計') + exclNote(rows, ['LEQ']) + exclNote(rows, ['LEQ'], 'mf', '手動不採用') + rawNotes(rows)
     };
   }
 

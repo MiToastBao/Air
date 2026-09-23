@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/app.css?v=1.4.0">
 </head>
 <body>
 <header class="top">
@@ -14,11 +14,31 @@
   </div>
 </header>
 
+<div class="wrap projbar">
+  <div class="row">
+    <b>計畫：</b><select id="projSel"></select>
+    <button id="projNew" type="button">＋ 新增計畫</button>
+    <button id="projEdit" type="button">修改編號／名稱</button>
+    <button id="projDel" type="button" class="danger">刪除這個計畫</button>
+  </div>
+  <div id="projCur" class="projcur"></div>
+  <div id="projForm" class="card" hidden>
+    <h3 id="projFormTitle">新增計畫</h3>
+    <div class="row">計畫編號 <input type="text" id="projCode" maxlength="20" style="width:200px" placeholder="例：11535"> <span class="hint">最多 20 字</span></div>
+    <div class="row">計畫名稱 <input type="text" id="projName" maxlength="40" style="width:min(520px,100%)" placeholder="例：華光社區開發案環境監測"> <span class="hint">最多 40 字</span></div>
+    <div class="row"><button id="projSave" class="primary" type="button">儲存</button><button id="projCancel" type="button">取消</button><span id="projMsg"></span></div>
+  </div>
+  <div id="projDelBox" class="msg err" hidden>
+    確定要刪除計畫「<b id="projDelName"></b>」？這個計畫的所有匯入資料與確認結果都會刪除，無法復原。建議先到「⑥ 備份與還原」下載備份。
+    <button id="projDelYes" class="danger" type="button">確定刪除</button><button id="projDelNo" type="button">取消</button>
+  </div>
+</div>
+
 <div id="fatal" class="wrap fatal" hidden></div>
 
 <nav class="tabs wrap" role="tablist">
   <button role="tab" data-tab="import" class="on">① 匯入月報</button>
-  <button role="tab" data-tab="review">② 備註時段確認 <span id="reviewBadge" class="badge" hidden></span></button>
+  <button role="tab" data-tab="review">② 備註時段確認 <span id="reviewBadge" class="badge" hidden></span><span id="suspectBadge" class="badge warnb" hidden></span></button>
   <button role="tab" data-tab="data">③ 已匯入資料</button>
   <button role="tab" data-tab="report">④ 產出報表</button>
   <button role="tab" data-tab="names">⑤ 感測器編號與名稱</button>
@@ -51,6 +71,7 @@
         <select id="rvStatus"><option value="todo">待確認</option><option value="confirmed">已確認</option><option value="all">全部</option></select>
         感測器 <select id="rvSensor"></select>
         月份 <select id="rvMonth"></select>
+        只顯示 <select id="rvActiveOnly"><option value="">（不篩選）</option><option value="ANY">任一測項還在採用中的列</option><option value="PM10">PM10 還在採用中的列</option><option value="PM25">PM2.5 還在採用中的列</option><option value="TMP">TMP 還在採用中的列</option><option value="HUM">HUM 還在採用中的列</option><option value="TVOC">TVOC 還在採用中的列</option><option value="WD">WD 風向還在採用中的列</option><option value="WS">WS 風速還在採用中的列</option><option value="RA">雨量還在採用中的列</option><option value="LEQ">Leq 還在採用中的列</option></select>
       </div>
       <details class="notefilter" id="rvNoteBox">
         <summary id="rvNoteSum">月報備註篩選</summary>
@@ -70,6 +91,24 @@
         <span class="hint" id="rvCount"></span>
       </div>
       <div id="reviewResult"></div>
+    </div>
+    <div class="card" id="suspectCard">
+      <h2>疑似異常時段 <span class="hint">（匯入後自動判定，預設不採用）</span></h2>
+      <p class="hint">系統依下方「異常判定門檻」自動找出明顯不合理的數值，<b>先設為不採用</b>，再請您逐段確認：確認是異常按「確認不採用」；是真實數值按「改回採用」。已經被判為無效或您已不採用的數值不會重複列出。</p>
+      <details class="notefilter"><summary>異常判定門檻（可修改）</summary>
+        <div id="autoForm"></div>
+        <div class="row"><button id="autoSave" class="primary" type="button">儲存並重新判定</button><button id="autoReset" type="button">填回出廠預設</button><span id="autoMsg"></span></div>
+      </details>
+      <div class="row">
+        顯示 <select id="sgStatus"><option value="pending">待確認</option><option value="exclude">已確認不採用</option><option value="keep">已改回採用</option><option value="all">全部</option></select>
+        感測器 <select id="sgSensor"></select>
+        狀況 <select id="sgRule"></select>
+      </div>
+      <div id="sgSummary"></div>
+      <div class="row" id="sgBatch" hidden>批次處理目前列出的 <b id="sgBatchN"></b> 段：
+        <button id="sgAllX" type="button" class="danger">全部確認不採用</button><button id="sgAllK" type="button">全部改回採用</button></div>
+      <div id="sgMsg"></div>
+      <div id="sgList"></div>
     </div>
     <div class="card">
       <h2>手動新增不採用時段</h2>
@@ -140,6 +179,7 @@
       <label class="opt"><input type="checkbox" id="optFill" checked> 期間內整天沒有資料的日子也列出，備註「當日無資料」</label>
       <label class="opt"><input type="checkbox" id="optPmZero" checked> PM10、PM2.5 測值為 0 視為儀器異常、不列入計算（與原 Access 相同）</label>
       <label class="opt"><input type="checkbox" id="optPmRatio" checked> 同一小時 PM2.5 大於 PM10 時，PM10 與 PM2.5 都視為異常、不列入計算</label>
+      <div class="row">空氣品質標準（日平均超過就在 Excel 以<b><u>粗體＋底線</u></b>標示）：PM10 &gt; <input type="number" id="stdPM10" class="num" step="any" value="75"> μg/m³、PM2.5 &gt; <input type="number" id="stdPM25" class="num" step="any" value="30"> μg/m³ <span class="hint">（法規改變時改這裡即可）</span></div>
 
       <div id="rangeInfo" class="info"></div>
       <div class="row">
@@ -185,13 +225,29 @@
     <div class="card">
       <h2>備份與還原</h2>
       <p class="hint">匯入的資料只存在<strong>這台電腦的這個瀏覽器</strong>裡，不會上傳到 GitHub。換電腦、換瀏覽器或清除瀏覽資料前，請先下載備份。</p>
-      <div class="row"><button id="backupBtn" class="primary">下載備份檔</button></div>
+      <div class="row"><button id="backupBtn" class="primary">下載備份檔（目前計畫）</button></div>
       <h3>還原</h3>
       <p class="hint">還原會<strong>取代</strong>目前瀏覽器裡的全部資料。</p>
       <div class="row">
         <label class="btnlike">選擇備份檔還原<input type="file" id="restoreFile" accept=".json" hidden></label>
         <span id="restoreMsg"></span>
       </div>
+    </div>
+    <div class="card">
+      <h2>儲存空間</h2>
+      <div id="storageInfo" class="info">計算中…</div>
+      <div class="row"><button id="persistBtn" type="button">申請持久保存</button><button id="storageRefresh" type="button">重新計算</button></div>
+      <p class="hint">「持久保存」是請瀏覽器不要在硬碟空間不足時自動清掉這個網站的資料。Chrome／Edge 會依您的使用情況自動決定是否同意（常用、加入書籤的網站比較容易通過），不會跳出詢問視窗；沒有通過也可以照常使用，只是請記得定期下載備份。</p>
+    </div>
+    <div class="card">
+      <h2>清除本機資料</h2>
+      <p class="hint">清除後無法復原，請先下載備份。</p>
+      <div class="row">
+        <button id="clrProj" type="button" class="danger">清除目前計畫的資料</button>
+        <button id="clrAll" type="button" class="danger">清除全部計畫與資料</button>
+      </div>
+      <div id="clrBox" class="msg err" hidden><span id="clrText"></span> <button id="clrYes" type="button" class="danger">確定清除</button><button id="clrNo" type="button">取消</button></div>
+      <div id="clrMsg"></div>
     </div>
   </section>
 </main>
@@ -200,13 +256,13 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js"></script>
-<script src="js/version.js"></script>
-<script src="js/core.js"></script>
-<script src="js/parser.js"></script>
-<script src="js/xlsxio.js"></script>
-<script src="js/model.js"></script>
-<script src="js/store.js"></script>
-<script src="js/app.js"></script>
+<script src="vendor/exceljs.min.js?v=1.4.0"></script>
+<script src="js/version.js?v=1.4.0"></script>
+<script src="js/core.js?v=1.4.0"></script>
+<script src="js/parser.js?v=1.4.0"></script>
+<script src="js/xlsxio.js?v=1.4.0"></script>
+<script src="js/model.js?v=1.4.0"></script>
+<script src="js/store.js?v=1.4.0"></script>
+<script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>

@@ -85,3 +85,17 @@ table.rv button{padding:2px 8px;font-size:13px;margin:1px}
 .bf{margin-right:12px;white-space:nowrap}
 table.rv tr.sel td{background:#e7f0fb}
 table.rv tr.pending.sel td{background:#f3e6ef}
+
+.badge.warnb{background:#8a5a00}
+.sg{border:2px solid #d9a441;border-radius:8px;padding:10px 14px;margin:10px 0;background:#fffaf0}
+.sg.ign{border-color:var(--line);background:#fafafa}
+.sg h4{margin:0 0 4px;font-size:15px}
+.sg .what{color:#4a3000;margin:2px 0}
+.sg .imp{margin:6px 0;font-size:14px}
+.sg .imp table{min-width:0}
+.sg .adv{background:#fff;border-left:4px solid var(--primary);padding:6px 10px;margin:6px 0;font-size:14px}
+
+.projbar{margin-top:10px}
+.projbar select{max-width:min(640px,100%)}
+.projcur{font-size:15px;color:var(--text);overflow-wrap:anywhere;text-wrap:balance}
+.projcur b{font-size:17px}

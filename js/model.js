@@ -294,7 +294,189 @@
     return { ok: !errors.length, errors: errors, warnings: parsed.warnings, changes: changes, same: same, noData: noData, ops: errors.length ? [] : ops };
   }
 
-  var api = { parseMapping: parseMapping, planMapping: planMapping, applyManual: applyManual, manualImpact: manualImpact, rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
+  // ---------- 疑似異常時段（匯入後自動判定，預設不採用，逐一確認） ----------
+  // 門檻都可以在「④ 產出報表 → 異常判定門檻」修改；以下是出廠預設
+  var DEFAULT_AUTO = {
+    LEQ999: { on: true, v: 999 },     // Leq ≥ v：儀器錯誤碼
+    LEQHIGH: { on: true, v: 120 },    // Leq > v dB
+    LEQLOW: { on: true, v: 30 },      // Leq < v dB
+    PMCAP: { on: true, v: 990 },      // PM10 或 PM2.5 ≥ v：接近儀器上限
+    HUM100: { on: true, v: 100 },     // 濕度 > v %
+    TMPRANGE: { on: true, lo: -10, hi: 50 }, // 溫度 < lo 或 > hi ℃
+    WSHIGH: { on: true, v: 40 },      // 風速 > v m/s
+    WDBAD: { on: true, v: 360 },      // 風向 > v 度
+    RAHIGH: { on: true, v: 150 },     // 時雨量 > v mm
+    STUCK: { on: true, v: 12 }        // PM10、PM2.5、TVOC、濕度同值連續 ≥ v 小時
+  };
+  function autoCfg(c) {
+    var out = {};
+    Object.keys(DEFAULT_AUTO).forEach(function (k) {
+      var d = DEFAULT_AUTO[k], u = (c && c[k]) || {};
+      out[k] = {}; Object.keys(d).forEach(function (x) { out[k][x] = u[x] !== undefined && u[x] !== null && u[x] !== '' ? u[x] : d[x]; });
+    });
+    return out;
+  }
+  function ruleLabel(rule, cfg) {
+    var c = cfg[rule];
+    switch (rule) {
+      case 'LEQ999': return 'Leq ' + c.v + ' 以上，疑似儀器錯誤碼';
+      case 'LEQHIGH': return 'Leq 高於 ' + c.v + ' dB，一般環境不太可能出現';
+      case 'LEQLOW': return 'Leq 低於 ' + c.v + ' dB，低於一般戶外背景音量';
+      case 'PMCAP': return 'PM 數值 ' + c.v + ' 以上，接近儀器量測上限（可能飽和或故障）';
+      case 'HUM100': return '相對濕度超過 ' + c.v + '%';
+      case 'TMPRANGE': return '溫度低於 ' + c.lo + '℃ 或高於 ' + c.hi + '℃';
+      case 'WSHIGH': return '風速高於 ' + c.v + ' m/s';
+      case 'WDBAD': return '風向超過 ' + c.v + ' 度（角度不合理）';
+      case 'RAHIGH': return '時雨量高於 ' + c.v + ' mm';
+      case 'STUCK': return '同一個數值連續 ' + c.v + ' 小時以上沒有變化（可能卡住）';
+    }
+    return rule;
+  }
+  var RULE_FIELDS = { LEQ999: ['LEQ'], LEQHIGH: ['LEQ'], LEQLOW: ['LEQ'], PMCAP: ['PM10', 'PM25'], HUM100: ['HUM'], TMPRANGE: ['TMP'], WSHIGH: ['WS'], WDBAD: ['WD'], RAHIGH: ['RA'], STUCK: null };
+  var STUCK_FIELDS = ['PM10', 'PM25', 'TVOC', 'HUM'];
+  var MERGE_GAP_HOURS = 3;
+
+  function tsHours(ts) { return Date.UTC(+ts.slice(0, 4), +ts.slice(5, 7) - 1, +ts.slice(8, 10), +ts.slice(11, 13)) / 3600000; }
+
+  /** 這一格目前是否「有被計算」（已被判為無效、確認不採用、手動不採用的都不算） */
+  function counted(r, f, zeroInvalid, pmRatio) {
+    var x = r.v[f];
+    if (typeof x !== 'number' || !(x >= 0)) return false;
+    if (x === 0 && zeroInvalid.indexOf(f) >= 0) return false;
+    if (pmRatio && (f === 'PM10' || f === 'PM25')) {
+      var a = r.v.PM10, b = r.v.PM25;
+      var okA = typeof a === 'number' && a >= 0 && !(a === 0 && zeroInvalid.indexOf('PM10') >= 0);
+      var okB = typeof b === 'number' && b >= 0 && !(b === 0 && zeroInvalid.indexOf('PM25') >= 0);
+      if (okA && okB && b > a) return false;
+    }
+    return true;
+  }
+
+  /**
+   * 找出疑似異常時段。sensors 要先經過 applyExclusions / applyManual。
+   * 回傳 [{key, id, rule, label, fields, from, to, hours, hits, hitTs:[...], min, max, noted}]
+   * 中間相隔 3 小時以內的合併成一段，但只有「符合的小時」會被自動不採用。
+   */
+  function detectSuspects(sensors, opts) {
+    opts = opts || {};
+    var zeroInvalid = opts.zeroInvalid || ['PM10', 'PM25'];
+    var pmRatio = opts.pmRatioInvalid !== false;
+    var cfg = autoCfg(opts.auto);
+    var on = function (k) { return !!cfg[k].on; };
+    var out = [];
+    sensors.forEach(function (s) {
+      var rows = s.rows;
+      var hitsByRule = {};
+      function add(rule, fkey, r, val) {
+        var k = rule + '|' + fkey;
+        (hitsByRule[k] = hitsByRule[k] || []).push({ ts: r.ts, val: val, noted: !!r.note });
+      }
+      var num = function (r, f) { return counted(r, f, zeroInvalid, pmRatio) ? r.v[f] : null; };
+      rows.forEach(function (r) {
+        var L = num(r, 'LEQ');
+        if (L !== null) {
+          if (on('LEQ999') && L >= cfg.LEQ999.v) add('LEQ999', 'LEQ', r, L);
+          else if (on('LEQHIGH') && L > cfg.LEQHIGH.v) add('LEQHIGH', 'LEQ', r, L);
+          else if (on('LEQLOW') && L < cfg.LEQLOW.v) add('LEQLOW', 'LEQ', r, L);
+        }
+        if (on('PMCAP')) {
+          var cap = ['PM10', 'PM25'].filter(function (f) { var x = num(r, f); return x !== null && x >= cfg.PMCAP.v; });
+          if (cap.length) add('PMCAP', 'PM', r, Math.max.apply(null, cap.map(function (f) { return r.v[f]; })));
+        }
+        var h = num(r, 'HUM'); if (on('HUM100') && h !== null && h > cfg.HUM100.v) add('HUM100', 'HUM', r, h);
+        var t = typeof r.v.TMP === 'number' ? r.v.TMP : null; // 溫度可能是負值，但負值已在匯入時判為無效
+        if (on('TMPRANGE') && t !== null && (t < cfg.TMPRANGE.lo || t > cfg.TMPRANGE.hi)) add('TMPRANGE', 'TMP', r, t);
+        var w = num(r, 'WS'); if (on('WSHIGH') && w !== null && w > cfg.WSHIGH.v) add('WSHIGH', 'WS', r, w);
+        var d = num(r, 'WD'); if (on('WDBAD') && d !== null && d > cfg.WDBAD.v) add('WDBAD', 'WD', r, d);
+        var ra = num(r, 'RA'); if (on('RAHIGH') && ra !== null && ra > cfg.RAHIGH.v) add('RAHIGH', 'RA', r, ra);
+      });
+      if (on('STUCK')) STUCK_FIELDS.forEach(function (f) {
+        var run = [];
+        function flush() {
+          if (run.length >= cfg.STUCK.v) run.forEach(function (r) { add('STUCK', f, r, r.v[f]); });
+          run = [];
+        }
+        rows.forEach(function (r) {
+          var ok = counted(r, f, zeroInvalid, pmRatio);
+          var last = run[run.length - 1];
+          if (ok && last && r.v[f] === last.v[f] && tsHours(r.ts) - tsHours(last.ts) === 1) run.push(r);
+          else { flush(); if (ok) run = [r]; }
+        });
+        flush();
+      });
+      Object.keys(hitsByRule).forEach(function (k) {
+        var rule = k.split('|')[0], fkey = k.split('|')[1];
+        var list = hitsByRule[k].sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
+        var g = null;
+        function close() {
+          if (!g) return;
+          var from = g.hits[0].ts, to = g.hits[g.hits.length - 1].ts;
+          var hours = rows.filter(function (r) { return r.ts >= from && r.ts <= to; }).length;
+          var vals = g.hits.map(function (h) { return h.val; });
+          var fields = (RULE_FIELDS[rule] || [fkey]).filter(function (f) { return s.fields.indexOf(f) >= 0; });
+          out.push({
+            key: s.id + '|' + rule + '|' + fkey + '|' + from + '|' + to, id: s.id, rule: rule, label: ruleLabel(rule, cfg),
+            fields: fields, from: from, to: to, hours: hours, hits: g.hits.length, hitTs: g.hits.map(function (h) { return h.ts; }),
+            min: Math.min.apply(null, vals), max: Math.max.apply(null, vals), noted: g.hits.filter(function (h) { return h.noted; }).length
+          });
+          g = null;
+        }
+        var gap = rule === 'STUCK' ? 1 : MERGE_GAP_HOURS + 1;
+        list.forEach(function (h) {
+          if (g && tsHours(h.ts) - tsHours(g.hits[g.hits.length - 1].ts) <= gap) g.hits.push(h);
+          else { close(); g = { hits: [h] }; }
+        });
+        close();
+      });
+    });
+    out.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.from < b.from ? -1 : a.from > b.from ? 1 : 0; });
+    return out;
+  }
+
+  /**
+   * 套用疑似異常的自動不採用：沒被使用者標成「採用（真實數值）」的段，符合的小時該測項設為無效，記在 r.af。
+   * decisions = {段key: 'keep' | 'exclude'}，沒有紀錄＝待確認（預設不採用）。
+   */
+  function applyAuto(sensors, groups, decisions) {
+    decisions = decisions || {};
+    var hit = {}; // id|ts → [欄位]
+    groups.forEach(function (g) {
+      if (decisions[g.key] === 'keep') return;
+      g.hitTs.forEach(function (ts) {
+        var k = g.id + '|' + ts;
+        (hit[k] = hit[k] || []);
+        g.fields.forEach(function (f) { if (hit[k].indexOf(f) < 0) hit[k].push(f); });
+      });
+    });
+    if (!Object.keys(hit).length) return sensors;
+    return sensors.map(function (s) {
+      var any = false;
+      var rows = s.rows.map(function (r) {
+        var fs = hit[s.id + '|' + r.ts];
+        if (!fs) return r;
+        var v = {}; Object.keys(r.v).forEach(function (k) { v[k] = r.v[k]; });
+        var af = [];
+        fs.forEach(function (f) { if (v[f] !== null && v[f] !== undefined) { v[f] = null; af.push(f); } });
+        if (!af.length) return r;
+        any = true;
+        var o = { ts: r.ts, v: v, af: af };
+        if (r.note) o.note = r.note;
+        if (r.xf) o.xf = r.xf;
+        if (r.mf) o.mf = r.mf;
+        return o;
+      });
+      return any ? { id: s.id, name: s.name, fields: s.fields, rows: rows } : s;
+    });
+  }
+
+  /** 完整流程：備註時段確認 → 手動不採用 → 疑似異常自動判定（預設不採用） */
+  function processAll(sensors, review, manual, opts, decisions) {
+    var base = applyManual(applyExclusions(sensors, review), manual);
+    var groups = detectSuspects(base, opts);
+    return { sensors: applyAuto(base, groups, decisions), groups: groups, base: base };
+  }
+
+  var api = { detectSuspects: detectSuspects, applyAuto: applyAuto, processAll: processAll, DEFAULT_AUTO: DEFAULT_AUTO, autoCfg: autoCfg, ruleLabel: ruleLabel, counted: counted, parseMapping: parseMapping, planMapping: planMapping, applyManual: applyManual, manualImpact: manualImpact, rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
   root.EnvModel = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

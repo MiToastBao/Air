@@ -279,3 +279,70 @@ test('匯入新月份時保留使用者設定的報表編號與名稱', () => {
   const op = plan.ops.find(o => o.store === 'sensors');
   assert.deepEqual(op.value, { id: '9000001', label: '表頭新文字 9000001', name: '我的名稱', reportId: 'A-01' });
 });
+
+// ---------- 疑似異常提醒 ----------
+test('疑似異常：Leq 999、Leq>120、PM≥990、濕度>100、同值連續≥12小時；已不採用的不再提醒', () => {
+  const noise = { id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-07-01', h => ({ LEQ: h === 3 ? 999 : (h >= 10 && h <= 12) ? 130 : 55 + (h % 3) })) };
+  const air = { id: 'A', name: 'A', fields: ['PM10', 'PM25', 'HUM', 'TMP'], rows: hours('2026-07-01', h => ({ PM10: h < 2 ? 1005 : 20 + h, PM25: h < 2 ? 999.5 : 10 + (h % 5), HUM: h === 5 ? 100.4 : 80 + (h % 4), TMP: 25 })) };
+  const stuck = { id: 'S', name: 'S', fields: ['PM10'], rows: hours('2026-07-01', h => ({ PM10: h < 13 ? 2.9 : 3 + h })) };
+  const g = M.detectSuspects([noise, air, stuck], {});
+  const k = g.map(x => [x.id, x.rule, x.from.slice(11), x.to.slice(11), x.hours, x.fields.join('+')]);
+  assert.deepEqual(k, [
+    ['A', 'PMCAP', '00:00', '01:00', 2, 'PM10+PM25'],
+    ['A', 'HUM100', '05:00', '05:00', 1, 'HUM'],
+    ['N', 'LEQ999', '03:00', '03:00', 1, 'LEQ'],
+    ['N', 'LEQHIGH', '10:00', '12:00', 3, 'LEQ'],
+    ['S', 'STUCK', '00:00', '12:00', 13, 'PM10']
+  ]);
+  // 手動不採用後就不再提醒
+  const after = M.detectSuspects(M.applyManual([noise], [{ id: 'N', from: '2026-07-01 10:00', to: '2026-07-01 12:00', fields: ['LEQ'] }]), {});
+  assert.deepEqual(after.map(x => x.rule), ['LEQ999']);
+});
+
+test('疑似異常：同值 11 小時不提醒；PM 為 0 不算卡住；中間隔 3 小時以內合併成一段', () => {
+  const s11 = { id: 'S', name: 'S', fields: ['PM10'], rows: hours('2026-07-01', h => ({ PM10: h < 11 ? 2.9 : 3 + h })) };
+  const z = { id: 'Z', name: 'Z', fields: ['PM10'], rows: hours('2026-07-01', () => ({ PM10: 0 })) };
+  assert.equal(M.detectSuspects([s11, z], {}).length, 0);
+  const n = { id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-07-01', h => ({ LEQ: (h === 1 || h === 5 || h === 10) ? 130 : 55 + (h % 3) })) };
+  const g = M.detectSuspects([n], {});
+  assert.deepEqual(g.map(x => [x.from.slice(11), x.to.slice(11), x.hours, x.hits]), [['01:00', '05:00', 5, 2], ['10:00', '10:00', 1, 1]]);
+});
+
+test('疑似異常預設不採用：只有符合的小時不計；改回採用後恢復；門檻可調', () => {
+  const n = { id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-07-01', h => ({ LEQ: (h === 1 || h === 3) ? 130 : h === 2 ? 70 : 60 })) };
+  const P = M.processAll([n], {}, [], {}, {});
+  assert.equal(P.groups.length, 1);
+  assert.deepEqual(P.groups[0].hitTs.map(t => t.slice(11)), ['01:00', '03:00']);
+  const r = Core.buildReports(P.sensors, { from: '2026-07-01', to: '2026-07-01' }).noise[0];
+  assert.equal(r.NIGHT, Core.energyMean1([60, 70, 60, 60, 60, 60])); // 01、03 時不計，中間的 02 時照算
+  assert.match(r.note, /自動判定異常不計：Leq 2小時/);
+  const keep = M.processAll([n], {}, [], {}, { [P.groups[0].key]: 'keep' });
+  assert.ok(Core.buildReports(keep.sensors, { from: '2026-07-01', to: '2026-07-01' }).noise[0].NIGHT > 100);
+  const cfg = M.processAll([n], {}, [], { auto: { LEQHIGH: { v: 140 } } }, {});
+  assert.equal(cfg.groups.length, 0);
+  const off = M.processAll([n], {}, [], { auto: { LEQHIGH: { on: false } } }, {});
+  assert.equal(off.groups.length, 0);
+});
+
+test('疑似異常其他門檻：溫度、風速、風向、時雨量', () => {
+  const a = { id: 'A', name: 'A', fields: ['TMP', 'WS', 'WD', 'RA'], rows: hours('2026-07-01', h => ({ TMP: h === 0 ? 55 : 25, WS: h === 1 ? 45 : 2, WD: h === 2 ? 400 : 90, RA: h === 3 ? 200 : 0 })) };
+  const g = M.detectSuspects([a], {});
+  assert.deepEqual(g.map(x => x.rule).sort(), ['RAHIGH', 'TMPRANGE', 'WDBAD', 'WSHIGH']);
+});
+
+test('Excel：PM10、PM2.5 日平均超過標準值（嚴格大於）才粗體＋底線，標準值可改', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const rows = [
+    { id: 'A', name: 'A', date: '2026-07-01', PM10: 75, PM25: 30, note: '' },
+    { id: 'A', name: 'A', date: '2026-07-02', PM10: 75.1, PM25: 30.1, note: '' }
+  ];
+  const wb = X.buildAirWorkbook(ExcelJS, rows, { std: { PM10: 75, PM25: 30 } });
+  const ws = wb.getWorksheet(1);
+  assert.ok(!(ws.getRow(2).getCell(6).font || {}).bold);
+  assert.ok(!(ws.getRow(2).getCell(7).font || {}).bold);
+  assert.deepEqual([ws.getRow(3).getCell(6).font.bold, ws.getRow(3).getCell(6).font.underline, ws.getRow(3).getCell(7).font.bold], [true, true, true]);
+  assert.equal(wb.overCount, 2);
+  const wb2 = X.buildAirWorkbook(ExcelJS, rows, { std: { PM10: 100, PM25: 35 } });
+  assert.equal(wb2.overCount, 0);
+});
