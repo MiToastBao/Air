@@ -1,9 +1,12 @@
-# 環境監測季報產生器
+# 微型感測器數據系統
+
+（原本暫稱「環境監測季報產生器」，v1.12.3 起改名。）
 
 匯入每月「數據月報」（.xlsx），選擇季別、月份區間、自訂日期或全部累積，下載：
 
 - 空氣品質日均報表（TMP、HUM、PM10、PM2.5、TVOC、WS 日平均、最頻風向、日累積雨量、備註）
 - 噪音 Leq 日晚夜報表（能量平均、備註）
+- 盒鬚圖（⑧）、環境部比對趨勢圖（⑨）：高解析度圖片與可編輯 Excel
 
 純靜態網頁，可直接用 GitHub Pages 發布，不需要建置步驟。
 
@@ -24,9 +27,30 @@
 | `js/xlsxio.js` | Excel 讀寫 |
 | `js/store.js` | 瀏覽器儲存 |
 | `js/app.js` | 畫面流程 |
+| `js/boxplot.js`、`js/boxstyle.js` | ⑧ 盒鬚圖（統計、圖片、Excel 盒鬚圖） |
+| `js/trend.js` | ⑨ 環境部比對趨勢圖（環境部資料匯入／自動抓取、趨勢圖、Excel 折線圖）；**環境部網址與金鑰在這裡** |
 | `js/version.js` | 版本號與版本紀錄 |
 | `vendor/exceljs.min.js` | ExcelJS 4.4.0（MIT，授權見 `vendor/exceljs-LICENSE.txt`） |
+| `vendor/jszip.min.js` | JSZip 3.10.1（MIT，授權見 `vendor/jszip-LICENSE.md`） |
 | `tests/` | 守門測試（只用人造資料），執行：`node --test tests/unit.test.js` |
+
+## 給維護者（含 AI）：常見維護事項
+
+### 環境部測站資料抓不到（⑨ 環境部比對趨勢圖 → 從環境部網站自動抓取）
+
+- 網址與金鑰寫在 **`js/trend.js`** 的 `DEFAULT_API`、`DEFAULT_KEY`（畫面上沒有設定欄位，刻意由維護者修改）。
+- 目前使用環境部環境資料開放平臺的資料集 **AQX_P_221**（空氣品質小時值_彰化縣_彰化站），說明頁：https://data.moenv.gov.tw/dataset/detail/AQX_P_221
+- `DEFAULT_API` 是網址範本，`{key}`、`{from}`、`{to}`、`{item}`、`{offset}` 由程式代入：金鑰、月初（例 `2026-04-01 00:00`）、下個月初、`PM10`／`PM2.5`、翻頁位置（每頁 1000 筆）。回傳必須是 JSON 陣列，欄位含 `itemengname`、`monitordate`、`concentration`（不分大小寫，另可有 `sitename`）；解析在 `parseMoenvJson`。
+- `DEFAULT_KEY` 是環境部「透過API下載歷史資料操作手冊」裡的範例金鑰；若被停用，請使用者到平臺註冊會員取得自己的金鑰後替換。
+- 瀏覽器端直接呼叫（2026-09 實測 CORS 可用）；金鑰錯誤時瀏覽器只回報「Failed to fetch」。
+- 修改後請跑 `node --test tests/unit.test.js`，並更新 `js/version.js`、`CHANGELOG.md`、`index.html` 的 `?v=` 版本參數。
+- 抓不到時使用者可改用「下載 CSV 後匯入」，格式相同（`parseMoenvCsv`）。
+
+### 其他
+
+- 版本號：`js/version.js`（`ENV_APP_VERSION` 與 `ENV_VERSION_HISTORY`），每次發布都要把 `index.html` 內所有 `?v=` 一起改，避免瀏覽器快取舊檔。
+- 計算口徑的詳細說明在 `使用說明.html`；改計算方式時兩邊要一起改，並補守門測試。
+- 不要把真實監測資料放進 repository（測試只用人造資料）。
 
 ## 發布（GitHub Pages）
 

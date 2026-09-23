@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css?v=1.10.0">
+<title>微型感測器數據系統</title>
+<link rel="stylesheet" href="css/app.css?v=1.12.3">
 </head>
 <body>
 <header class="top">
   <div class="wrap">
-    <h1>環境監測季報產生器</h1>
-    <p class="sub">匯入每月數據月報 → 選擇季別或區間 → 下載「空氣品質日均」與「噪音 Leq 日晚夜」報表</p>
+    <h1>微型感測器數據系統</h1>
+    <p class="sub">匯入每月數據月報 → 資料異常確認 → 產出空氣品質日均、噪音 Leq 日晚夜報表、盒鬚圖、環境部比對趨勢圖</p>
   </div>
 </header>
 
@@ -45,6 +45,7 @@
   <button role="tab" data-tab="backup">⑥ 備份與還原</button>
   <button role="tab" data-tab="noise">⑦ 噪音時段設定</button>
   <button role="tab" data-tab="box">⑧ 盒鬚圖</button>
+  <button role="tab" data-tab="trend">⑨ 環境部比對趨勢圖</button>
 </nav>
 
 <main class="wrap">
@@ -278,6 +279,50 @@
     <div id="bxOut2"></div>
   </section>
 
+  <!-- ⑨ 環境部比對趨勢圖 -->
+  <section id="tab-trend" class="panel" hidden>
+    <div class="card">
+      <h2>匯入環境部測站資料</h2>
+      <p class="hint">請匯入環境部「空氣品質小時值」下載的 CSV（例：空氣品質小時值_彰化縣_彰化站 2026-04.csv），可一次選多個月。只讀取 PM10 與 PM2.5；x、#、* 等無效值不計。同一小時重複匯入以新的為準。每個計畫各自保存，備份檔也會一起保存。</p>
+      <label class="drop" id="moeDrop">按這裡選擇 CSV 檔，或把檔案拖進來<input type="file" id="moeFile" accept=".csv" multiple></label>
+      <div id="moeMsg"></div>
+      <details class="notefilter" id="moeApiBox" open><summary>從環境部網站自動抓取</summary>
+        <p class="hint">直接向環境部環境資料開放平臺抓「空氣品質小時值」（目前設定為彰化站，資料集 <a href="https://data.moenv.gov.tw/dataset/detail/AQX_P_221" target="_blank" rel="noopener">AQX_P_221</a>），只抓 PM10 與 PM2.5，抓完和匯入 CSV 一樣存起來。環境部平臺約保存近兩年的資料。</p>
+        <div class="row">抓取月份 從 <input type="month" id="apiFrom"> 到 <input type="month" id="apiTo"> <button type="button" id="apiGo" class="primary">開始抓取</button> <button type="button" id="apiTest">測試連線</button></div>
+        <div id="apiMsg"></div>
+        <p class="hint">抓不到時，請先按「測試連線」確認。若是環境部網站改版、網址變更，請把錯誤訊息截圖並附上環境部新的資料集網址，找 AI 協助修改程式（AI 可參考網站程式裡的 README.md，網址設定在 js/trend.js）；在修好之前，可以先用上方「下載 CSV 後匯入」的方式。</p>
+      </details>
+      <div class="row">圖例名稱 <input type="text" id="moeLabel" style="width:220px" placeholder="環境部彰化測站"> <span class="hint">（圖上環境部測站那條紅線的名稱）</span></div>
+      <div id="moeList" class="scroll"></div>
+      <div class="row" id="moeDelRow" hidden>刪除 <select id="moeDelM"></select> 的環境部資料 <button type="button" id="moeDel" class="danger">刪除</button> <span id="moeDelConfirm" hidden>確定刪除？<button type="button" id="moeDelYes" class="danger">確定</button><button type="button" id="moeDelNo">取消</button></span></div>
+    </div>
+    <div class="card">
+      <h2>產生趨勢圖</h2>
+      <p class="hint">每台感測器的 PM10、PM2.5 和環境部測站畫在同一張圖（PM2.5 一張、PM10 一張）。環境部測站是<b style="color:#e60000">紅色粗線</b>，一眼就能看出各感測器的趨勢是否和環境部一致。感測器採用的數值和報表相同（異常、不採用的小時不計）。</p>
+      <div class="modes">
+        <label><input type="radio" name="trMode" value="month" checked> 單月</label>
+        <label><input type="radio" name="trMode" value="months"> 月份區間</label>
+        <label><input type="radio" name="trMode" value="quarters"> 季別區間</label>
+        <label><input type="radio" name="trMode" value="dates"> 自訂日期</label>
+      </div>
+      <div class="row" data-tr="month"><select id="trMonth"></select></div>
+      <div class="row" data-tr="months" hidden>從 <select id="trMFrom"></select> 到 <select id="trMTo"></select></div>
+      <div class="row" data-tr="quarters" hidden>從 民國 <input type="number" id="trQY1" class="num" min="100" max="200"> 年 <select id="trQ1"><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select>
+        到 民國 <input type="number" id="trQY2" class="num" min="100" max="200"> 年 <select id="trQ2"><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select></div>
+      <div class="row" data-tr="dates" hidden>從 <input type="date" id="trDFrom"> 到 <input type="date" id="trDTo"></div>
+      <div class="row">資料 <label class="bf"><input type="radio" name="trFreq" value="day" checked> 日平均</label><label class="bf"><input type="radio" name="trFreq" value="hour"> 逐時</label></div>
+      <h3>感測器 <span class="hint">（圖例用「⑤ 感測器編號與名稱」的名稱；不想畫的取消勾選，會記住）</span></h3>
+      <div class="row"><button type="button" id="trAll">全選</button><button type="button" id="trNone">全不選</button></div>
+      <div id="trSensors" class="nflist" style="max-height:none"></div>
+      <h3>圖的設定</h3>
+      <label class="opt"><input type="checkbox" id="trTitle" checked> 圖上方顯示標題（PM2.5、PM10）</label>
+      <div class="row">Y 軸範圍（空白＝自動）：PM2.5 <input type="number" step="any" class="num" id="trY25min" placeholder="最小"> ～ <input type="number" step="any" class="num" id="trY25max" placeholder="最大">　PM10 <input type="number" step="any" class="num" id="trY10min" placeholder="最小"> ～ <input type="number" step="any" class="num" id="trY10max" placeholder="最大"></div>
+      <div class="row"><button type="button" id="trGo" class="primary">產生趨勢圖</button><button type="button" id="trXlsx" disabled>下載 Excel（可編輯）</button><button type="button" id="trPngs" disabled>下載全部圖片（高解析度 PNG，zip）</button></div>
+      <div id="trMsg"></div>
+    </div>
+    <div id="trOut"></div>
+  </section>
+
   <!-- ⑦ 噪音時段 -->
   <section id="tab-noise" class="panel" hidden>
     <div class="card">
@@ -350,17 +395,18 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.10.0"></script>
-<script src="js/version.js?v=1.10.0"></script>
-<script src="js/core.js?v=1.10.0"></script>
-<script src="js/parser.js?v=1.10.0"></script>
-<script src="js/xlsxio.js?v=1.10.0"></script>
-<script src="js/model.js?v=1.10.0"></script>
-<script src="js/store.js?v=1.10.0"></script>
-<script src="vendor/jszip.min.js?v=1.10.0"></script>
-<script src="js/boxstyle.js?v=1.10.0"></script>
-<script src="js/boxplot.js?v=1.10.0"></script>
-<script src="js/app.js?v=1.10.0"></script>
+<script src="vendor/exceljs.min.js?v=1.12.3"></script>
+<script src="js/version.js?v=1.12.3"></script>
+<script src="js/core.js?v=1.12.3"></script>
+<script src="js/parser.js?v=1.12.3"></script>
+<script src="js/xlsxio.js?v=1.12.3"></script>
+<script src="js/model.js?v=1.12.3"></script>
+<script src="js/store.js?v=1.12.3"></script>
+<script src="vendor/jszip.min.js?v=1.12.3"></script>
+<script src="js/boxstyle.js?v=1.12.3"></script>
+<script src="js/boxplot.js?v=1.12.3"></script>
+<script src="js/trend.js?v=1.12.3"></script>
+<script src="js/app.js?v=1.12.3"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>

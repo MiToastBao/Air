@@ -560,3 +560,69 @@ test('盒鬚圖 Excel：每個測項一張原生盒鬚圖（chartEx），資料�
   assert.deepEqual([ws.getCell('L1').value, ws.getCell('L2').value, ws.getCell('N2').value, ws.getCell('L5').value], ['感測器', '甲', 1, "乙's"]);
   assert.equal(wb.getWorksheet('統計').getRow(2).getCell(3).value, 3);
 });
+
+test('環境部小時值 CSV：只讀 PM10、PM2.5，x 等無效值不計，英文或中文測項名稱都認得；日平均四捨五入到 1 位', () => {
+  const T = require('../js/trend.js');
+  const csv = '﻿siteid,sitename,county,itemid,itemname,itemengname,itemunit,monitordate,concentration\n' +
+    '1,Test,"T County",4,PM10,PM10,μg/m3,"2026-04-01 00:00",18\n' +
+    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 00:00",13\n' +
+    '1,Test,"T County",3,Ozone,O3,ppb,"2026-04-01 00:00",21\n' +
+    '1,測試,測試縣,4,懸浮微粒,PM10,μg/m3,"2026-04-01 01:00",11\n' +
+    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 01:00",x\n' +
+    '1,Test,"T County",4,PM10,PM10,μg/m3,"2026-04-02 00:00",20\n';
+  const p = T.parseMoenvCsv(csv);
+  assert.equal(p.ok, true);
+  assert.deepEqual(p.hours['2026-04-01 01:00'], { PM10: 11, PM25: null });
+  assert.deepEqual([p.invalid.PM25, p.total.PM10, p.months.join()], [1, 3, '2026-04']);
+  const d = T.moenvDaily(p.hours, '2026-04-01', '2026-04-30');
+  assert.deepEqual(d['2026-04-01'], { PM10: 14.5, PM25: 13 });
+  assert.deepEqual(d['2026-04-02'], { PM10: 20, PM25: null });
+  assert.equal(T.parseMoenvCsv('a,b\n1,2').ok, false);
+  const m = T.mergeMoenv({ hours: p.hours }, T.parseMoenvCsv(csv.replace('",18', '",19')));
+  assert.deepEqual([m.added, m.replaced, m.hours['2026-04-01 00:00'].PM10], [0, 3, 19]);
+});
+
+test('趨勢圖：Y 軸自動上限不為少數異常高值拉高；Excel 折線圖環境部紅色粗線、資料範圍正確', async () => {
+  const T = require('../js/trend.js');
+  const vals = Array.from({ length: 200 }, (_, i) => 10 + (i % 20));
+  const s = [{ name: 'A', values: vals.concat([500]) }, { name: '環境部', ref: true, values: vals.map(v => v + 5).concat([40]) }];
+  const a = T.autoYMax(s);
+  assert.ok(a.max >= 34 && a.max <= 60, String(a.max));
+  assert.equal(a.cut, 1);
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const JSZip = require('../vendor/jszip.min.js');
+  const x = ['2026-04-01', '2026-04-02', '2026-04-03'];
+  const charts = [{ sheet: 'PM2.5', title: 'PM2.5', xTitle: '日期', yTitle: 'PM2.5（μg/m³）', yMax: 150, x, series: [{ name: '感測器A', color: '#1f77b4', values: [1, null, 3] }, { name: '環境部測站', color: T.REF_COLOR, ref: true, values: [2, 2, 2] }] }];
+  const buf = await T.buildTrendWorkbook(ExcelJS, JSZip, charts, ['說明'], false);
+  const zip = await JSZip.loadAsync(buf);
+  const c = await zip.file('xl/charts/chart1.xml').async('string');
+  assert.match(c, /<c:cat><c:numRef><c:f>'PM2\.5'!\$A\$2:\$A\$4<\/c:f>/);
+  assert.match(c, /<c:val><c:numRef><c:f>'PM2\.5'!\$C\$2:\$C\$4<\/c:f>/);
+  assert.match(c, /<a:ln w="38100" cap="rnd"><a:solidFill><a:srgbClr val="E60000"\/>/);
+  assert.match(c, /<c:max val="150"\/>/);
+  assert.match(c, /<c:dispBlanksAs val="gap"\/>/);
+  const ct = await zip.file('[Content_Types].xml').async('string');
+  assert.ok(ct.includes('/xl/charts/chart1.xml'));
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf);
+  const ws = wb.getWorksheet('PM2.5');
+  assert.deepEqual([ws.getCell('B1').value, ws.getCell('C1').value, ws.getCell('B3').value, ws.getCell('C3').value], ['感測器A', '環境部測站', null, 2]);
+});
+
+test('環境部自動抓取：網址範本代入金鑰、月份、測項，每頁 1000 筆自動翻頁，只留該月份', async () => {
+  const T = require('../js/trend.js');
+  const u = T.apiUrl('https://x/api?k={key}&f={from}&t={to}&i={item}&o={offset}&filters=a|b', { key: 'K 1', from: '2026-04-01 00:00', to: '2026-05-01 00:00', item: 'PM2.5', offset: 1000 });
+  assert.equal(u, 'https://x/api?k=K%201&f=2026-04-01%2000%3A00&t=2026-05-01%2000%3A00&i=PM2.5&o=1000&filters=a%7Cb');
+  const calls = [];
+  const fake = url => {
+    calls.push(url);
+    const item = /i=([^&]+)/.exec(url)[1], off = +/o=(\d+)/.exec(url)[1];
+    const n = item === 'PM10' ? (off === 0 ? 1000 : 3) : 2;
+    return Promise.resolve(Array.from({ length: n }, (_, i) => ({ ItemEngName: decodeURIComponent(item), MonitorDate: '2026-04-' + String(1 + Math.floor((off + i) / 24) % 28).padStart(2, '0') + ' ' + String((off + i) % 24).padStart(2, '0') + ':00', Concentration: i === 0 ? 'x' : '10', SiteName: '彰化' })).concat(off === 0 && item === 'PM10' ? [] : [{ itemengname: 'PM10', monitordate: '2026-05-01 00:00', concentration: '5' }]));
+  };
+  const p = await T.fetchMonth(fake, 'https://x/api?k={key}&f={from}&t={to}&i={item}&o={offset}', 'K', '2026-04');
+  assert.equal(calls.length, 3); // PM10 兩頁、PM2.5 一頁
+  assert.deepEqual(p.months, ['2026-04']);
+  assert.ok(Object.keys(p.hours).every(t => t.startsWith('2026-04')));
+  assert.equal(p.sites['彰化'] > 0, true);
+  await assert.rejects(T.fetchMonth(() => Promise.resolve({ error: 'bad key' }), 'https://x?{from}{to}{item}{offset}{key}', '', '2026-04'), /不是資料/);
+});

@@ -24,6 +24,7 @@
       if (b.dataset.tab === 'report') { updateRangeInfo(); renderNoiseNow(); }
       if (b.dataset.tab === 'noise') renderNoiseForm();
       if (b.dataset.tab === 'box') renderBoxForm();
+      if (b.dataset.tab === 'trend') renderTrendForm();
       if (b.dataset.tab === 'names') { renderNames(); renderLife(); }
       if (b.dataset.tab === 'backup') refreshStorage();
       if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); renderSuspects(); renderAutoForm(); renderGaps(); }
@@ -105,7 +106,7 @@
       $('projSel').innerHTML = list.map(function (p) { return '<option value="' + esc(p.uid) + '">' + esc(projLabel(p)) + '</option>'; }).join('');
       if (cur) $('projSel').value = cur.uid;
       $('projCur').innerHTML = cur ? '目前計畫：<b>' + esc(cur.code || '（未設編號）') + '</b>　' + esc(cur.name || '（未命名）') + '　<span class="hint">各計畫的資料、確認結果與設定彼此獨立</span>' : '';
-      document.title = (cur && cur.code ? cur.code + ' ' : '') + '環境監測季報產生器';
+      document.title = (cur && cur.code ? cur.code + ' ' : '') + '微型感測器數據系統';
     });
   }
   function resetViews() {
@@ -1641,24 +1642,25 @@
   document.querySelectorAll('input[name=bxMode]').forEach(function (r) {
     r.addEventListener('change', function () { document.querySelectorAll('[data-bx]').forEach(function (el) { el.hidden = el.dataset.bx !== bxMode(); }); bxDirty(); });
   });
-  function bxRange() {
-    var md = bxMode(), ms = allMonths();
+  function bxRange(P) {
+    P = P || 'bx';
+    var r0 = document.querySelector('input[name=' + P + 'Mode]:checked'), md = r0 ? r0.value : 'month', ms = allMonths();
     if (!ms.length) return { error: '尚未匯入資料。' };
     var end = function (m) { return m + '-' + daysInMonth(m); };
-    if (md === 'month') { var m = $('bxMonth').value; return m ? { from: m + '-01', to: end(m), label: ymRoc(m), title: rocMonth(m) } : { error: '請選擇月份。' }; }
+    if (md === 'month') { var m = $(P + 'Month').value; return m ? { from: m + '-01', to: end(m), label: ymRoc(m), title: rocMonth(m) } : { error: '請選擇月份。' }; }
     if (md === 'months') {
-      var a = $('bxMFrom').value, b = $('bxMTo').value;
+      var a = $(P + 'MFrom').value, b = $(P + 'MTo').value;
       if (a > b) return { error: '起始月份晚於結束月份。' };
       return { from: a + '-01', to: end(b), label: ymRoc(a) + '-' + ymRoc(b), title: rocMonth(a) + '～' + rocMonth(b) };
     }
     if (md === 'quarters') {
-      var y1 = Number($('bxQY1').value), q1 = Number($('bxQ1').value), y2 = Number($('bxQY2').value), q2 = Number($('bxQ2').value);
+      var y1 = Number($(P + 'QY1').value), q1 = Number($(P + 'Q1').value), y2 = Number($(P + 'QY2').value), q2 = Number($(P + 'Q2').value);
       if (!(y1 >= 1 && y2 >= 1)) return { error: '請輸入民國年。' };
       var r1 = Core.quarterRange(y1, q1), r2 = Core.quarterRange(y2, q2);
       if (r1.from > r2.from) return { error: '起始季別晚於結束季別。' };
       return { from: r1.from, to: r2.to, label: y1 + 'Q' + q1 + (r1.from === r2.from ? '' : '-' + y2 + 'Q' + q2), title: y1 + '年第' + q1 + '季' + (r1.from === r2.from ? '' : '～' + y2 + '年第' + q2 + '季') };
     }
-    var f = $('bxDFrom').value, t = $('bxDTo').value;
+    var f = $(P + 'DFrom').value, t = $(P + 'DTo').value;
     if (!f || !t) return { error: '請選擇起訖日期。' };
     if (f > t) return { error: '起始日期晚於結束日期。' };
     return { from: f, to: t, label: dRoc(f) + '-' + dRoc(t), title: Core.toRoc(f) + '～' + Core.toRoc(t) };
@@ -1820,5 +1822,260 @@
       download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), bxFileBase() + '_' + stamp() + '.xlsx');
     }).catch(function (er) { $('bxMsg').innerHTML = '<div class="msg err">Excel 產生失敗：' + esc(er.message || er) + '</div>'; })
       .then(function () { btn.disabled = false; btn.textContent = old; if ($('bxWait')) $('bxWait').remove(); });
+  });
+
+  // ---------------- ⑨ 環境部比對趨勢圖 ----------------
+  var TR = window.EnvTrend, trResult = null, trReady = false;
+  function fillRangeForm(P, ready) {
+    var ms = allMonths(), opts = ms.map(function (m) { return '<option value="' + m + '">' + rocMonth(m) + '</option>'; }).join('');
+    [P + 'Month', P + 'MFrom', P + 'MTo'].forEach(function (id) { var k = $(id).value; $(id).innerHTML = opts; if (k && ms.indexOf(k) >= 0) $(id).value = k; });
+    if (!ms.length) return;
+    if (!ready || ms.indexOf($(P + 'Month').value) < 0) $(P + 'Month').value = ms[ms.length - 1];
+    if (!ready) { $(P + 'MFrom').value = ms[0]; $(P + 'MTo').value = ms[ms.length - 1]; }
+    var roc = function (m) { return Number(m.slice(0, 4)) - 1911; }, q = function (m) { return Math.floor((Number(m.slice(5, 7)) - 1) / 3) + 1; };
+    if (!$(P + 'QY1').value) { $(P + 'QY1').value = roc(ms[0]); $(P + 'Q1').value = q(ms[0]); $(P + 'QY2').value = roc(ms[ms.length - 1]); $(P + 'Q2').value = q(ms[ms.length - 1]); }
+  }
+  document.querySelectorAll('input[name=trMode]').forEach(function (r) {
+    r.addEventListener('change', function () { var v = document.querySelector('input[name=trMode]:checked').value; document.querySelectorAll('[data-tr]').forEach(function (el) { el.hidden = el.dataset.tr !== v; }); trDirty(); });
+  });
+  function moe() { return state.meta.moenv || { hours: {} }; }
+  function moeLabel() { return (moe().label || '').trim() || '環境部彰化測站'; }
+  function trSet() { return settings().trend || {}; }
+  function trSave(patch) {
+    if (state.loadError) return;
+    var v = {}; Object.keys(settings()).forEach(function (k) { v[k] = settings()[k]; });
+    var b = {}; Object.keys(trSet()).forEach(function (k) { b[k] = trSet()[k]; });
+    Object.keys(patch).forEach(function (k) { b[k] = patch[k]; });
+    v.trend = b; state.meta.settings = v;
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).catch(function () {});
+  }
+  function renderMoeList() {
+    var mm = TR.moenvMonths(moe().hours), ks = Object.keys(mm).sort();
+    $('moeLabel').value = moe().label || '';
+    if (!ks.length) { $('moeList').innerHTML = '<p class="hint">尚未匯入環境部資料。</p>'; $('moeDelRow').hidden = true; return; }
+    $('moeList').innerHTML = '<table><tr><th>月份</th><th>小時數</th><th>PM10 有效</th><th>PM2.5 有效</th></tr>' + ks.map(function (m) {
+      var o = mm[m], exp = daysInMonth(m) * 24;
+      return '<tr><td>' + rocMonth(m) + '</td><td class="' + (o.hours < exp ? 'part' : '') + '">' + o.hours + ' / ' + exp + '</td><td>' + o.PM10 + '</td><td>' + o.PM25 + '</td></tr>';
+    }).join('') + '</table><p class="hint">黃色＝這個月的小時數不完整（環境部原始檔本來就缺，或還沒匯入完整的月份）。</p>';
+    $('moeDelM').innerHTML = ks.map(function (m) { return '<option value="' + m + '">' + rocMonth(m) + '</option>'; }).join('');
+    $('moeDelM').value = ks[ks.length - 1];
+    $('moeDelRow').hidden = false; $('moeDelConfirm').hidden = true;
+  }
+  function moeWrite(obj) { return Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'moenv', value: obj } }]).then(reload); }
+  function moeImport(files) {
+    if (state.loadError || !files.length) return;
+    $('moeMsg').innerHTML = '<div class="msg info">讀取中…</div>';
+    Promise.all(Array.prototype.map.call(files, function (f) {
+      return f.text().then(function (t) { return { name: f.name, p: TR.parseMoenvCsv(t) }; });
+    })).then(function (res) {
+      var cur = moe(), hours = cur.hours || {}, msgs = [], bad = [], sites = {}, add = 0, rep = 0;
+      res.forEach(function (r) {
+        if (!r.p.ok) { bad.push(esc(r.name) + '：' + esc(r.p.error)); return; }
+        var m = TR.mergeMoenv({ hours: hours }, r.p); hours = m.hours; add += m.added; rep += m.replaced;
+        Object.keys(r.p.sites).forEach(function (k) { sites[k] = true; });
+        msgs.push(esc(r.name) + '：' + r.p.months.map(rocMonth).join('、') + '，PM10 有效 ' + (r.p.total.PM10 - r.p.invalid.PM10) + ' 小時（無效 ' + r.p.invalid.PM10 + '）、PM2.5 有效 ' + (r.p.total.PM25 - r.p.invalid.PM25) + ' 小時（無效 ' + r.p.invalid.PM25 + '）');
+      });
+      var sn = Object.keys(sites);
+      var zh = sn.filter(function (x) { return /[一-鿿]/.test(x); })[0];
+      var label = cur.label || (zh ? '環境部' + zh + '測站' : '');
+      var done = function () {
+        $('moeMsg').innerHTML = (msgs.length ? '<div class="msg ok">已匯入：新增 ' + add + ' 小時' + (rep ? '、覆蓋 ' + rep + ' 小時' : '') + '。<ul class="issues">' + msgs.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></div>' : '') +
+          (bad.length ? '<div class="msg err">' + bad.join('<br>') + '</div>' : '') +
+          (sn.length > 2 || (sn.length === 2 && !zh) ? '<div class="msg warn">檔案裡有不只一個測站：' + esc(sn.join('、')) + '。請確認只匯入同一個測站的資料。</div>' : '');
+        renderMoeList(); trDirty();
+      };
+      if (!msgs.length) return done();
+      return moeWrite({ label: label, hours: hours }).then(done);
+    }).catch(function (e) { $('moeMsg').innerHTML = '<div class="msg err">匯入失敗：' + esc(e.message || e) + '</div>'; });
+  }
+  $('moeFile').addEventListener('change', function () { moeImport(this.files); this.value = ''; });
+  ['dragover', 'dragenter'].forEach(function (ev) { $('moeDrop').addEventListener(ev, function (e) { e.preventDefault(); $('moeDrop').classList.add('over'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { $('moeDrop').addEventListener(ev, function (e) { e.preventDefault(); $('moeDrop').classList.remove('over'); }); });
+  $('moeDrop').addEventListener('drop', function (e) { moeImport(e.dataTransfer.files); });
+  $('moeLabel').addEventListener('change', function () { var o = moe(); moeWrite({ label: $('moeLabel').value.trim(), hours: o.hours || {} }).then(function () { trDirty(); }); });
+  $('moeDel').addEventListener('click', function () { $('moeDelConfirm').hidden = false; });
+  $('moeDelNo').addEventListener('click', function () { $('moeDelConfirm').hidden = true; });
+  $('moeDelYes').addEventListener('click', function () {
+    var m = $('moeDelM').value, o = moe(), h = {};
+    Object.keys(o.hours || {}).forEach(function (t) { if (t.slice(0, 7) !== m) h[t] = o.hours[t]; });
+    moeWrite({ label: o.label || '', hours: h }).then(function () { $('moeMsg').innerHTML = '<div class="msg ok">已刪除 ' + rocMonth(m) + ' 的環境部資料。</div>'; renderMoeList(); trDirty(); });
+  });
+  function renderTrendForm() {
+    fillRangeForm('tr', trReady);
+    renderMoeList(); renderApiForm();
+    var ts = trSet(), off = ts.offSensors || [];
+    var list = allSensorMeta().filter(function (s) {
+      return state.chunks.some(function (c) { return c.id === s.id && (c.fields.indexOf('PM10') >= 0 || c.fields.indexOf('PM25') >= 0); });
+    }).sort(function (a, b) { return collator.compare(a.name, b.name); });
+    $('trSensors').innerHTML = list.length ? list.map(function (s) {
+      return '<label style="display:block"><input type="checkbox" data-trs="' + esc(s.id) + '"' + (off.indexOf(s.id) < 0 ? ' checked' : '') + '> ' + esc(s.name) + ' <span class="hint">' + esc(s.id) + '</span></label>';
+    }).join('') : '<p class="hint">尚未匯入任何資料。</p>';
+    if (!trReady) {
+      if (typeof ts.title === 'boolean') $('trTitle').checked = ts.title;
+      var y = ts.y || {};
+      [['trY25min', 'PM25', 'min'], ['trY25max', 'PM25', 'max'], ['trY10min', 'PM10', 'min'], ['trY10max', 'PM10', 'max']].forEach(function (a) { var v = (y[a[1]] || {})[a[2]]; $(a[0]).value = typeof v === 'number' ? v : ''; });
+      if (ts.freq === 'hour') document.querySelector('input[name=trFreq][value=hour]').checked = true;
+    }
+    trReady = true;
+  }
+  function trDirty() { if (trResult) { trResult = null; $('trXlsx').disabled = true; $('trPngs').disabled = true; $('trMsg').innerHTML = '<div class="msg info">設定已變更，請重新按「產生趨勢圖」。</div>'; } }
+  $('tab-trend').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.id === 'moeFile' || t.id === 'moeLabel' || t.id === 'moeDelM') return;
+    if (t.dataset.trs) trSave({ offSensors: Array.prototype.map.call(document.querySelectorAll('[data-trs]:not(:checked)'), function (x) { return x.dataset.trs; }) });
+    if (/^trY/.test(t.id) || t.id === 'trTitle' || t.name === 'trFreq') {
+      var y = { PM25: {}, PM10: {} }, g = function (id) { var v = $(id).value, n = Number(v); return v !== '' && isFinite(n) ? n : undefined; };
+      y.PM25.min = g('trY25min'); y.PM25.max = g('trY25max'); y.PM10.min = g('trY10min'); y.PM10.max = g('trY10max');
+      trSave({ y: y, title: $('trTitle').checked, freq: document.querySelector('input[name=trFreq]:checked').value });
+    }
+    trDirty();
+  });
+  $('trAll').addEventListener('click', function () { document.querySelectorAll('[data-trs]').forEach(function (x) { x.checked = true; }); trSave({ offSensors: [] }); trDirty(); });
+  $('trNone').addEventListener('click', function () { document.querySelectorAll('[data-trs]').forEach(function (x) { x.checked = false; }); trSave({ offSensors: Array.prototype.map.call(document.querySelectorAll('[data-trs]'), function (x) { return x.dataset.trs; }) }); trDirty(); });
+  function trBuild(r) {
+    var hourly = document.querySelector('input[name=trFreq]:checked').value === 'hour';
+    var on = {}; document.querySelectorAll('[data-trs]:checked').forEach(function (x) { on[x.dataset.trs] = true; });
+    var zero = $('optPmZero').checked ? Core.ZERO_INVALID : [], ratio = $('optPmRatio').checked;
+    var sensors = proc().sensors.filter(function (s) { return on[s.id] && (s.fields.indexOf('PM10') >= 0 || s.fields.indexOf('PM25') >= 0); })
+      .sort(function (a, b) { return collator.compare(sensorName(a.id), sensorName(b.id)); });
+    var days = Core.daysBetween(r.from, r.to), x = [];
+    if (hourly) days.forEach(function (d) { for (var h = 0; h < 24; h++) x.push(d + ' ' + Core.pad(h) + ':00'); }); else x = days.slice();
+    var idx = {}; x.forEach(function (t, i) { idx[t] = i; });
+    var mh = moe().hours || {}, md = hourly ? null : TR.moenvDaily(mh, r.from, r.to);
+    var daily = hourly ? null : Core.buildReports(sensors, r, { fillMissingDays: false, zeroInvalid: zero, pmRatioInvalid: ratio, noise: settings().noise }).air;
+    var ys = trSet().y || {};
+    var charts = [['PM25', 'PM2.5', 'PM2.5（μg/m³）'], ['PM10', 'PM10', 'PM10（μg/m³）']].map(function (f) {
+      var series = [], k = 0, noData = [];
+      sensors.forEach(function (s) {
+        if (s.fields.indexOf(f[0]) < 0) return;
+        var vals = x.map(function () { return null; }), any = false;
+        if (hourly) s.rows.forEach(function (row) { var i = idx[row.ts]; if (i === undefined) return; if (M.counted(row, f[0], zero, ratio)) { vals[i] = row.v[f[0]]; any = true; } });
+        else daily.forEach(function (d) { if (d.id !== s.id) return; var i = idx[d.date]; if (i !== undefined && typeof d[f[0]] === 'number') { vals[i] = d[f[0]]; any = true; } });
+        if (!any) { noData.push(sensorName(s.id)); return; }
+        series.push({ name: sensorName(s.id), color: TR.PALETTE[k++ % TR.PALETTE.length], values: vals });
+      });
+      var ref = x.map(function (t) { if (hourly) { var o = mh[t]; return o ? o[f[0]] : null; } var o2 = md[t]; return o2 ? o2[f[0]] : null; });
+      var refAny = ref.some(function (v) { return v !== null && v !== undefined; });
+      if (refAny) series.push({ name: moeLabel(), color: TR.REF_COLOR, ref: true, values: ref });
+      var y = ys[f[0]] || {};
+      var auto = TR.autoYMax(series);
+      return { key: f[0], sheet: f[1], title: f[1], yTitle: f[2], xTitle: hourly ? '日期時間' : '日期', yMin: y.min, yMax: typeof y.max === 'number' ? y.max : auto.max, autoCut: typeof y.max === 'number' ? 0 : auto.cut,
+        showTitle: $('trTitle').checked, hourly: hourly, x: x, series: series, noData: noData, refAny: refAny,
+        refMissing: x.filter(function (t, i) { return ref[i] === null || ref[i] === undefined; }).length };
+    });
+    return { hourly: hourly, charts: charts };
+  }
+  $('trGo').addEventListener('click', function () {
+    var r = bxRange('tr');
+    if (r.error) { $('trMsg').innerHTML = '<div class="msg err">' + esc(r.error) + '</div>'; return; }
+    $('trMsg').innerHTML = '<div class="msg info">計算中…</div>';
+    paint().then(function () {
+      var b = trBuild(r), charts = b.charts.filter(function (c) { return c.series.length; });
+      if (!charts.length) { $('trOut').innerHTML = ''; $('trMsg').innerHTML = '<div class="msg err">這個期間沒有任何資料。</div>'; return; }
+      trResult = { range: r, hourly: b.hourly, charts: charts };
+      var unit = b.hourly ? '小時' : '天';
+      $('trOut').innerHTML = charts.map(function (c, i) {
+        return '<div class="card bxfig"><h3>' + esc(c.title) + ' <span class="hint">（' + c.series.filter(function (s) { return !s.ref; }).length + ' 台感測器' + (c.refAny ? '＋' + esc(moeLabel()) : '') + '；Y 軸上限 ' + c.yMax + '）</span></h3><canvas data-trc="' + i + '"></canvas>' +
+          '<div class="row"><button type="button" data-trpng="' + i + '">下載這張圖（PNG）</button>' + (c.autoCut ? '<span class="hint">有 ' + c.autoCut + ' 個異常高值超過 Y 軸上限，線條在圖頂端截斷（主要看趨勢；要看全部請在上方填 Y 軸最大值）。</span>' : '') +
+          (c.noData.length ? '<span class="hint">期間內沒有有效數值、未畫：' + esc(c.noData.join('、')) + '</span>' : '') + '</div></div>';
+      }).join('');
+      charts.forEach(function (c, i) { TR.drawTrend(document.querySelector('canvas[data-trc="' + i + '"]'), c, 1.5); });
+      $('trXlsx').disabled = false; $('trPngs').disabled = false;
+      var c0 = charts[0], warn = '';
+      if (!c0.refAny) warn = '<div class="msg warn">這個期間沒有環境部資料，圖上沒有紅線。請先在上方匯入環境部 CSV 或自動抓取。</div>';
+      else if (c0.refMissing) warn = '<div class="msg warn">這個期間有 ' + c0.refMissing + ' ' + unit + '沒有環境部' + c0.title + '資料（原始檔缺或無效，或還沒匯入），紅線在這些地方會斷開。</div>';
+      $('trMsg').innerHTML = '<div class="msg ok">期間 <b>' + esc(r.title) + '</b>（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '），' + (b.hourly ? '逐時' : '日平均') + '：已產生 ' + charts.length + ' 張趨勢圖。</div>' + warn;
+    });
+  });
+  function trFileBase() { var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : ''; return pc + '環境部比對趨勢圖_' + trResult.range.label + (trResult.hourly ? '_逐時' : '_日平均'); }
+  function trPngBlob(c) { return new Promise(function (res) { var cv = document.createElement('canvas'); TR.drawTrend(cv, c, 3); cv.toBlob(function (b) { res(b); }, 'image/png'); }); }
+  $('trOut').addEventListener('click', function (e) {
+    var i = e.target.dataset.trpng; if (i === undefined || !trResult) return;
+    var c = trResult.charts[+i];
+    trPngBlob(c).then(function (b) { download(b, trFileBase() + '_' + safeName(c.title) + '.png'); });
+  });
+  $('trPngs').addEventListener('click', function () {
+    if (!trResult) return;
+    var zip = new window.JSZip(), btn = $('trPngs'), old = btn.textContent; btn.disabled = true; btn.textContent = '產生中…';
+    trResult.charts.reduce(function (p, c, i) { return p.then(function () { return trPngBlob(c).then(function (b) { zip.file((i + 1) + '_' + safeName(c.title) + '.png', b); }); }); }, Promise.resolve())
+      .then(function () { return zip.generateAsync({ type: 'blob' }); })
+      .then(function (b) { download(b, trFileBase() + '_圖片.zip'); })
+      .catch(function (er) { $('trMsg').innerHTML = '<div class="msg err">圖片產生失敗：' + esc(er.message || er) + '</div>'; })
+      .then(function () { btn.disabled = false; btn.textContent = old; });
+  });
+  $('trXlsx').addEventListener('click', function () {
+    if (!trResult) return;
+    var btn = $('trXlsx'), old = btn.textContent; btn.disabled = true; btn.textContent = '產生中…';
+    var r = trResult.range, cur = Store.current() || {};
+    var info = ['環境部測站比對趨勢圖（' + (cur.code ? cur.code + ' ' : '') + (cur.name || '') + '）',
+      '期間：' + r.title + '（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '），' + (trResult.hourly ? '逐時值' : '日平均'),
+      '感測器：數值和報表相同（異常值、空白、PM 為 0、PM2.5 大於 PM10、備註時段／疑似異常／手動設為不採用的小時都不列入）' + (trResult.hourly ? '。' : '；日平均為當日有效小時的平均，四捨五入到小數 1 位。'),
+      '環境部測站（' + moeLabel() + '）：環境部空氣品質小時值，x、#、* 等無效值不計' + (trResult.hourly ? '。' : '；日平均為當日有效小時的平均，四捨五入到小數 1 位。'),
+      '「趨勢圖」工作表：Excel 折線圖，環境部為紅色粗線；圖的資料在「PM2.5」「PM10」工作表，修改數值圖會跟著更新。空白格＝沒有有效數值，折線會斷開。',
+      'Y 軸上限：PM2.5 ' + (trResult.charts.filter(function (c) { return c.key === 'PM25'; })[0] || {}).yMax + '、PM10 ' + (trResult.charts.filter(function (c) { return c.key === 'PM10'; })[0] || {}).yMax + '（為了看趨勢，少數異常高值會超出圖頂端；要看全部請在圖上按右鍵「座標軸格式」把最大值改成自動）。',
+      '產生時間：' + new Date().toLocaleString('zh-TW')];
+    TR.buildTrendWorkbook(ExcelJS, window.JSZip, trResult.charts, info, trResult.hourly).then(function (buf) {
+      download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), trFileBase() + '_' + stamp() + '.xlsx');
+    }).catch(function (er) { $('trMsg').innerHTML = '<div class="msg err">Excel 產生失敗：' + esc(er.message || er) + '</div>'; })
+      .then(function () { btn.disabled = false; btn.textContent = old; });
+  });
+
+  // ---------------- ⑨ 從環境部網站自動抓取 ----------------
+  function renderApiForm() {
+    var mm = Object.keys(TR.moenvMonths(moe().hours)).sort(), ms = allMonths();
+    var def = ms.length ? ms[ms.length - 1] : new Date().toISOString().slice(0, 7);
+    if (!$('apiFrom').value) $('apiFrom').value = mm.length ? TR.nextMonth(mm[mm.length - 1]) : def;
+    if ($('apiFrom').value > def && ms.length) $('apiFrom').value = def;
+    if (!$('apiTo').value) $('apiTo').value = def;
+  }
+  function apiFetchJson(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (r) {
+      return r.text().then(function (t) {
+        if (!r.ok) throw new Error('環境部網站回應錯誤（HTTP ' + r.status + '）：' + t.slice(0, 150));
+        try { return JSON.parse(t); } catch (e) { throw new Error('環境部回傳的不是 JSON：' + t.slice(0, 150)); }
+      });
+    }, function () { throw new Error('連不到環境部網站（可能是網路中斷、網址錯誤、金鑰無效，或環境部暫時停止服務）。'); });
+  }
+  function apiUsed() { return { tpl: TR.DEFAULT_API, key: TR.DEFAULT_KEY }; } // 網址與金鑰寫在 js/trend.js（環境部改網址時由 AI 協助修改）
+  $('apiTest').addEventListener('click', function () {
+    var u = apiUsed(), ym = $('apiTo').value || new Date().toISOString().slice(0, 7);
+    $('apiMsg').innerHTML = '<div class="msg info">測試中…</div>';
+    apiFetchJson(TR.apiUrl(u.tpl, { key: u.key, from: ym + '-01 00:00', to: TR.nextMonth(ym) + '-01 00:00', item: 'PM10', offset: 0 })).then(function (j) {
+      if (!Array.isArray(j)) throw new Error('回傳的不是資料清單：' + JSON.stringify(j).slice(0, 150));
+      var p = TR.parseMoenvJson(j), n = Object.keys(p.hours).length;
+      $('apiMsg').innerHTML = '<div class="msg ok">連線成功：' + rocMonth(ym) + ' PM10 有 ' + n + ' 小時資料' + (Object.keys(p.sites).length ? '（測站：' + esc(Object.keys(p.sites).join('、')) + '）' : '') + '。</div>';
+    }).catch(function (e) { $('apiMsg').innerHTML = '<div class="msg err">' + esc(e.message) + '<br><span class="hint">給維護的 AI：網址與金鑰設定在 js/trend.js 的 DEFAULT_API、DEFAULT_KEY（資料集 AQX_P_221），說明見 README.md。</span></div>'; });
+  });
+  $('apiGo').addEventListener('click', function () {
+    if (state.loadError) return;
+    var a = $('apiFrom').value, b = $('apiTo').value, u = apiUsed();
+    if (!a || !b) { $('apiMsg').innerHTML = '<div class="msg err">請選擇抓取月份。</div>'; return; }
+    if (a > b) { $('apiMsg').innerHTML = '<div class="msg err">起始月份晚於結束月份。</div>'; return; }
+    var months = [], m = a; while (m <= b && months.length < 36) { months.push(m); m = TR.nextMonth(m); }
+    var btn = $('apiGo'); btn.disabled = true;
+    var cur = moe(), hours = cur.hours || {}, lines = [], add = 0, rep = 0, sites = {}, failed = [];
+    months.reduce(function (p, ym, i) {
+      return p.then(function () {
+        $('apiMsg').innerHTML = '<div class="msg info">抓取中：' + rocMonth(ym) + '（' + (i + 1) + ' / ' + months.length + '）…</div>';
+        return TR.fetchMonth(apiFetchJson, u.tpl, u.key, ym).then(function (r) {
+          var n = Object.keys(r.hours).length;
+          if (!n) { lines.push(rocMonth(ym) + '：環境部沒有這個月的資料'); return; }
+          var mg = TR.mergeMoenv({ hours: hours }, r); hours = mg.hours; add += mg.added; rep += mg.replaced;
+          Object.keys(r.sites).forEach(function (k) { sites[k] = true; });
+          lines.push(rocMonth(ym) + '：' + n + ' 小時，PM10 有效 ' + (r.total.PM10 - r.invalid.PM10) + '（無效 ' + r.invalid.PM10 + '）、PM2.5 有效 ' + (r.total.PM25 - r.invalid.PM25) + '（無效 ' + r.invalid.PM25 + '）');
+        }).catch(function (e) { failed.push(rocMonth(ym) + '：' + e.message); });
+      });
+    }, Promise.resolve()).then(function () {
+      var sn = Object.keys(sites), zh = sn.filter(function (x) { return /[一-鿿]/.test(x); })[0];
+      var label = cur.label || (zh ? '環境部' + zh + '測站' : '');
+      var write = add + rep ? moeWrite({ label: label, hours: hours }) : Promise.resolve();
+      return write.then(function () {
+        $('apiMsg').innerHTML = (add + rep ? '<div class="msg ok">抓取完成：新增 ' + add + ' 小時' + (rep ? '、更新 ' + rep + ' 小時' : '') + '。</div>' : '') +
+          (lines.length ? '<ul class="issues">' + lines.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>' : '') +
+          (failed.length ? '<div class="msg err">以下月份沒抓到：<br>' + failed.map(esc).join('<br>') + '<br>請按「測試連線」檢查，或改用下載 CSV 後匯入。若一直抓不到，可能是環境部網址變更，請找 AI 協助修改（維護說明：README.md；網址設定：js/trend.js 的 DEFAULT_API）。</div>' : '') +
+          (sn.length > 2 || (sn.length === 2 && !zh) ? '<div class="msg warn">抓到的資料有不只一個測站：' + esc(sn.join('、')) + '，請確認網址。</div>' : '');
+        renderMoeList(); trDirty();
+      });
+    }).catch(function (e) { $('apiMsg').innerHTML = '<div class="msg err">' + esc(e.message || e) + '</div>'; }).then(function () { btn.disabled = false; });
   });
 })();
