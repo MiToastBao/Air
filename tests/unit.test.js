@@ -359,3 +359,105 @@ test('重複匯入：可選擇只匯入新資料，重複的保留原本；並�
   const rows = skip.ops.find(o => o.store === 'chunks').value.rows;
   assert.deepEqual(rows.map(r => r.v.TMP), [25, 26, 28]); // 01 時保留原本的 26
 });
+
+// ---------- 噪音時段自訂 ----------
+test('噪音時段：出廠預設與原本相同；可改成夜間跨日（當日 22 點～翌日 7 點）', () => {
+  const rows = hours('2026-08-01', h => ({ LEQ: h < 6 ? 40 : 60 })).concat(hours('2026-08-02', h => ({ LEQ: h < 7 ? 45 : 70 })));
+  const s = { id: 'N', name: 'N', fields: ['LEQ'], rows };
+  const d0 = Core.buildReports([s], { from: '2026-08-01', to: '2026-08-01' }).noise[0];
+  assert.deepEqual(d0.hours, { DAY: 14, EVE: 2, NIGHT: 8 });
+  assert.equal(d0.NIGHT, Core.energyMean1([40, 40, 40, 40, 40, 40, 60, 60]));
+  const cfg = { DAY: [{ fd: 0, fh: 7, td: 0, th: 19 }], EVE: [{ fd: 0, fh: 19, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 22, td: 1, th: 7 }] };
+  const d1 = Core.buildReports([s], { from: '2026-08-01', to: '2026-08-01' }, { noise: cfg }).noise[0];
+  assert.deepEqual(d1.hours, { DAY: 12, EVE: 3, NIGHT: 9 });
+  assert.equal(d1.NIGHT, Core.energyMean1([60, 60, 45, 45, 45, 45, 45, 45, 45])); // 8/1 22、23 點 + 8/2 00～06 點
+  assert.equal(Core.describeNoise(cfg), '日間 8/1 07:00～8/1 19:00；晚間 8/1 19:00～8/1 22:00；夜間 8/1 22:00～8/2 07:00');
+  assert.equal(Core.describeNoise(null), '日間 8/1 06:00～8/1 20:00；晚間 8/1 20:00～8/1 22:00；夜間 8/1 00:00～8/1 06:00＋8/1 22:00～8/2 00:00');
+});
+
+test('噪音時段檢查：結束早於開始、漏掉或重複的整點都會提醒', () => {
+  assert.equal(Core.checkNoise(null).ok, true); assert.equal(Core.checkNoise(null).warnings.length, 0);
+  const bad = Core.checkNoise({ DAY: [{ fd: 0, fh: 20, td: 0, th: 6 }] });
+  assert.equal(bad.ok, false);
+  const w = Core.checkNoise({ DAY: [{ fd: 0, fh: 6, td: 0, th: 21 }], EVE: [{ fd: 0, fh: 20, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 23, td: 1, th: 6 }] });
+  assert.equal(w.ok, true);
+  assert.match(w.warnings.join(''), /22 點/);      // 22 點沒有被任何時段涵蓋
+  assert.match(w.warnings.join(''), /20 點（日間、晚間）/);
+});
+
+test('噪音時段跨日：期間最後一天翌日沒資料、期間第一天凌晨屬於前一天，備註寫清楚；出廠預設不加這些說明', () => {
+  const rows = hours('2026-08-01', () => ({ LEQ: 60 })).concat(hours('2026-08-02', () => ({ LEQ: 60 })));
+  const s = { id: 'N', name: 'N', fields: ['LEQ'], rows };
+  const cfg = { DAY: [{ fd: 0, fh: 7, td: 0, th: 19 }], EVE: [{ fd: 0, fh: 19, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 22, td: 1, th: 7 }] };
+  const r = Core.buildReports([s], { from: '2026-08-01', to: '2026-08-02' }, { noise: cfg }).noise;
+  assert.match(r[0].note, /本日 8\/1 00～06 點 屬於前一日（7\/31）的夜間，前一日不在本報表期間內，這 7 小時（有資料 7 小時）沒有列入本報表/);
+  assert.doesNotMatch(r[0].note, /應採計/);
+  assert.deepEqual(r[1].hours.NIGHT, 2);
+  assert.match(r[1].note, /夜間應採計 9 小時，其中 8\/3 00～06 點 沒有資料（可能是尚未匯入），只採計有資料的 2 小時/);
+  assert.doesNotMatch(r[1].note, /前一日/);
+  const d = Core.buildReports([s], { from: '2026-08-01', to: '2026-08-02' }).noise;
+  assert.equal(d[0].note, '有效資料24小時（日14、晚2、夜8）');
+  assert.equal(d[1].note, '有效資料24小時（日14、晚2、夜8）');
+});
+
+test('資料缺漏：整月沒有資料、缺少小時、測值空白；空品與噪音備註寫出缺少的小時', () => {
+  // 2026-02（28 天）：A 缺 2/3 03～05 點、2/4 10 點 PM10 空白；B 只有 3 月資料 → 2 月整月沒有資料
+  const rowsA = [];
+  for (let d = 1; d <= 28; d++) hours('2026-02-' + String(d).padStart(2, '0'), h => ({ PM10: d === 4 && h === 10 ? null : 20, PM25: 10 }))
+    .forEach(r => { if (!(r.ts >= '2026-02-03 03:00' && r.ts <= '2026-02-03 05:00')) rowsA.push(r); });
+  const chunks = [{ id: 'A', month: '2026-02', fields: ['PM10', 'PM25'], rows: rowsA },
+    { id: 'B', month: '2026-03', fields: ['LEQ'], rows: hours('2026-03-01', () => ({ LEQ: 50 })) }];
+  const g = M.dataIssues(chunks);
+  const k = x => [x.kind, x.id, x.from, x.to, x.hours, x.fields.join(',')];
+  assert.equal(g.find(x => x.id === 'A' && x.month === '2026-03').kind, 'month');
+  assert.deepEqual(g.filter(x => x.id === 'A' && x.month === '2026-02').map(k), [
+    ['missing', 'A', '2026-02-03 03:00', '2026-02-03 05:00', 3, 'PM10,PM25'],
+    ['blank', 'A', '2026-02-04 10:00', '2026-02-04 10:00', 1, 'PM10']]);
+  assert.deepEqual(g.find(x => x.id === 'B' && x.month === '2026-02').kind, 'month');
+  assert.equal(g.filter(x => x.id === 'B' && x.kind === 'missing').length, 1); // 3/2 起整月缺少小時
+  const s = M.sensorsFromChunks(chunks, [], null);
+  const air = Core.buildReports(s, { from: '2026-02-03', to: '2026-02-03' }).air[0];
+  assert.match(air.note, /^有效資料21小時；月報缺少 2\/3 03～05 點（3 小時）的資料，不列入$/);
+  const nz = Core.buildReports([{ id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-08-05', () => ({ LEQ: 50 })).filter(r => r.ts.slice(11, 13) !== '03') }],
+    { from: '2026-08-05', to: '2026-08-05' }, { importedMonths: ['2026-08'] }).noise[0];
+  assert.match(nz.note, /夜間應採計 8 小時，其中 8\/5 03 點 沒有資料（月報沒有這幾個小時），只採計有資料的 7 小時/);
+  const cfg = { DAY: [{ fd: 0, fh: 7, td: 0, th: 19 }], EVE: [{ fd: 0, fh: 19, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 22, td: 1, th: 7 }] };
+  const last = Core.buildReports([{ id: 'N', name: 'N', fields: ['LEQ'], rows: hours('2026-08-31', () => ({ LEQ: 50 })) }], { from: '2026-08-31', to: '2026-08-31' }, { noise: cfg, importedMonths: ['2026-08'] }).noise[0];
+  assert.match(last.note, /9\/1 00～06 點 沒有資料（尚未匯入）/);
+});
+
+test('感測器新增與停用：新感測器自動加入並設啟用日；少了某台會列出；停用後報表與缺漏清單不再列', () => {
+  // 7 月：A、B 兩台
+  const jul = P.parseWorkbook([sheet('9000001', ['DateTime', 'TMP ℃', '看板一9000001'], [[U(2026, 7, 1, 0), 25, null]]), sheet('9000002', ['DateTime', 'TMP ℃', '看板二9000002'], [[U(2026, 7, 31, 23), 26, null]])]);
+  const p1 = M.planImport([{ fileName: '7.xlsx', result: jul }], [], []);
+  assert.deepEqual(p1.absent, []);
+  const chunks = p1.ops.filter(o => o.store === 'chunks').map(o => o.value);
+  const sensors = p1.ops.filter(o => o.store === 'sensors').map(o => o.value);
+  assert.equal(sensors.find(x => x.id === '9000002').name, '看板二');
+  // 8 月：B 不見了，新增 C（8/10 起）
+  const aug = P.parseWorkbook([sheet('9000001', ['DateTime', 'TMP ℃', '看板一9000001'], [[U(2026, 8, 1, 0), 25, null]]), sheet('9000003', ['DateTime', 'TMP ℃', '看板三9000003'], [[U(2026, 8, 10, 0), 27, null]])]);
+  const p2 = M.planImport([{ fileName: '8.xlsx', result: aug }], chunks, sensors);
+  assert.deepEqual(p2.newInfo.map(x => [x.id, x.name, x.activeFrom]), [['9000003', '看板三', '2026-08-10']]);
+  assert.deepEqual(p2.absent.map(x => [x.id, x.name, x.months.join(), x.lastTs]), [['9000002', '看板二', '2026-08', '2026-07-31 23:00']]);
+  // 使用者選「已停用，8/1 起」→ 之後匯入 9 月不再提示 B
+  const all = chunks.concat(p2.ops.filter(o => o.store === 'chunks').map(o => o.value));
+  const sen2 = sensors.map(x => x.id === '9000002' ? Object.assign({}, x, { retiredFrom: '2026-08-01' }) : x).concat(p2.ops.filter(o => o.store === 'sensors' && o.value.id === '9000003').map(o => o.value));
+  const sep = P.parseWorkbook([sheet('9000001', ['DateTime', 'TMP ℃', '看板一9000001'], [[U(2026, 9, 1, 0), 25, null]]), sheet('9000003', ['DateTime', 'TMP ℃', '看板三9000003'], [[U(2026, 9, 1, 0), 27, null]])]);
+  assert.deepEqual(M.planImport([{ fileName: '9.xlsx', result: sep }], all, sen2).absent, []);
+  const sepB = P.parseWorkbook([sheet('9000002', ['DateTime', 'TMP ℃', '看板二9000002'], [[U(2026, 9, 2, 0), 25, null]])]);
+  assert.deepEqual(M.planImport([{ fileName: '9b.xlsx', result: sepB }], all, sen2).revived.map(x => x.id), ['9000002']); // 已停用卻又有資料 → 提醒
+  // 缺漏清單：B 停用後、C 啟用前都不列
+  const g = M.dataIssues(all, sen2);
+  assert.equal(g.filter(x => x.kind === 'month').length, 0);
+  assert.ok(g.every(x => !(x.id === '9000003' && x.from < '2026-08-10')));
+  assert.ok(g.every(x => !(x.id === '9000002' && x.from >= '2026-08-01')));
+  // 報表：C 在 8/10 以前不補空白日；B 在 8/1 起不補
+  const S = M.processAll(M.sensorsFromChunks(all, sen2, null), { x: {} }, [{ id: '9000001', from: '2026-08-01 00:00', to: '2026-08-01 00:00', fields: ['TMP'] }], {}, {}).sensors;
+  const rep = Core.buildReports(S, { from: '2026-08-01', to: '2026-08-31' }, { importedMonths: ['2026-07', '2026-08'] }).air;
+  assert.equal(rep.filter(r => r.id === '9000002').length, 0);
+  assert.equal(rep.filter(r => r.id === '9000003')[0].date, '2026-08-10');
+  assert.equal(rep.filter(r => r.id === '9000001').length, 31);
+  // 名稱修改不會弄掉停用日
+  const pm = M.planMapping({ rows: [{ src: '9000002', rid: '9000002', name: '新名字', line: 0 }], errors: [], warnings: [] }, sen2, ['9000002']);
+  assert.equal(pm.ops[0].value.retiredFrom, '2026-08-01');
+});

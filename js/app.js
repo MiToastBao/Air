@@ -21,10 +21,11 @@
       document.querySelectorAll('.tabs button').forEach(function (x) { x.classList.toggle('on', x === b); });
       document.querySelectorAll('.panel').forEach(function (p) { p.hidden = p.id !== 'tab-' + b.dataset.tab; });
       if (b.dataset.tab === 'data') renderCoverage();
-      if (b.dataset.tab === 'report') updateRangeInfo();
-      if (b.dataset.tab === 'names') renderNames();
+      if (b.dataset.tab === 'report') { updateRangeInfo(); renderNoiseNow(); }
+      if (b.dataset.tab === 'noise') renderNoiseForm();
+      if (b.dataset.tab === 'names') { renderNames(); renderLife(); }
       if (b.dataset.tab === 'backup') refreshStorage();
-      if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); renderSuspects(); renderAutoForm(); }
+      if (b.dataset.tab === 'review') { renderReview(); fillManualForm(); renderSuspects(); renderAutoForm(); renderGaps(); }
     });
   });
 
@@ -38,16 +39,16 @@
     lockWrites();
   }
   function lockWrites() {
-    ['fileInput', 'delBtn', 'saveNames', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm', 'clrProj', 'clrAll', 'projNew', 'projDel', 'autoSave'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
+    ['fileInput', 'delBtn', 'saveNames', 'saveLife', 'restoreFile', 'mapFile', 'delYes', 'mnAdd', 'rvConfirm', 'clrProj', 'clrAll', 'projNew', 'projDel', 'autoSave'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
   }
 
   function reload() {
     return Store.loadAll().then(function (d) {
-      procCache = null;
+      procCache = null; gapCache = null;
       state.chunks = d.chunks; state.sensors = d.sensors;
       state.meta = {}; d.meta.forEach(function (m) { state.meta[m.key] = m.value; });
       applySettings();
-      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters(); fillManualForm(); refreshSuspectBadge();
+      renderCoverage(); fillMonthSelects(); updateRangeInfo(); refreshReviewBadge(); fillReviewFilters(); fillManualForm(); refreshSuspectBadge(); refreshGapBadge();
       if (!$('tab-backup').hidden) refreshStorage();
     });
   }
@@ -70,7 +71,7 @@
   }
   function resetViews() {
     state.pending = null; $('importPreview').innerHTML = ''; $('reviewResult').innerHTML = ''; $('mnResult').innerHTML = ''; $('sgMsg').innerHTML = '';
-    $('reportMsg').innerHTML = ''; $('mapPreview').innerHTML = ''; $('namesMsg').innerHTML = ''; $('restoreMsg').innerHTML = ''; $('clrMsg').innerHTML = '';
+    $('reportMsg').innerHTML = ''; $('mapPreview').innerHTML = ''; $('namesMsg').innerHTML = ''; $('restoreMsg').innerHTML = ''; $('clrMsg').innerHTML = ''; $('lifeMsg').innerHTML = '';
     draft = {}; selected = {}; noteOff = {};
     ['rvSensor', 'rvMonth', 'sgSensor', 'sgRule'].forEach(function (id) { $(id).value = ''; });
     $('qYear').value = ''; $('dFrom').value = ''; $('dTo').value = '';
@@ -230,7 +231,7 @@
           var hrs = sg.reduce(function (a, g) { return a + g.hits; }, 0), byR = {};
           sg.forEach(function (g) { byR[g.label.split('，')[0].split('（')[0]] = (byR[g.label.split('，')[0].split('（')[0]] || 0) + 1; });
           html += '<div class="msg warn">發現 <b>' + sg.length + '</b> 段疑似異常（共 ' + hrs + ' 小時）：' + esc(Object.keys(byR).map(function (k) { return k + ' ' + byR[k] + ' 段'; }).join('、')) +
-            '。匯入後預設不採用，請到「② 備註時段確認」的「疑似異常時段」逐段確認。</div>';
+            '。匯入後預設不採用，請到「② 資料異常確認」的「疑似異常時段」逐段確認。</div>';
         }
       }
       var iss = res.issues.filter(function (x) { return x.level !== 'info'; });
@@ -261,13 +262,27 @@
           return '<li>' + rocMonth(m) + '：' + dm[m].dup.toLocaleString() + ' 筆重複（' + Object.keys(dm[m].sensors).length + ' 台感測器）' +
             (dm[m].changed ? '，其中 <b>' + dm[m].changed.toLocaleString() + ' 筆數值或備註不同</b>' : '，內容與已匯入的完全相同') + '</li>';
         }).join('') + '</ul>' +
-          (st.changed ? '覆蓋後，數值不同的那些小時會改用新檔案的數值；如果那些小時之前在「② 備註時段確認」確認過，會變成「月報已更新，請重新確認」。' : '內容完全相同，覆蓋或略過結果都一樣。') +
+          (st.changed ? '覆蓋後，數值不同的那些小時會改用新檔案的數值；如果那些小時之前在「② 資料異常確認」確認過，會變成「月報已更新，請重新確認」。' : '內容完全相同，覆蓋或略過結果都一樣。') +
           '<br>請選擇：</div>';
         html += '<div class="row"><button id="confirmImport" class="danger">覆蓋重複的資料並匯入</button>' +
           (st.added ? '<button id="skipImport" class="primary">只匯入新資料（重複的保留原本）</button>' : '') +
           '<button id="cancelImport">取消匯入</button></div>';
       }
-      if (plan.newSensors.length) html += '<div class="msg info">新的感測器 ' + plan.newSensors.length + ' 台：' + esc(plan.newSensors.join('、')) + '。編號與名稱可在「⑤ 感測器編號與名稱」修改。</div>';
+      if (plan.newInfo.length) html += '<div class="msg info"><b>新的感測器 ' + plan.newInfo.length + ' 台</b>，匯入時會自動新增（名稱取自月報表頭，可在「⑤ 感測器編號與名稱」修改）：<ul>' + plan.newInfo.map(function (x) {
+        return '<li>' + esc(x.id) + '　' + esc(x.name) + (x.activeFrom ? '　<span class="hint">從 ' + esc(Core.toRoc(x.activeFrom)) + ' 起有資料，設為啟用日，之前的日子不算缺漏</span>' : '') + '</li>';
+      }).join('') + '</ul></div>';
+      if (plan.revived.length) html += '<div class="msg warn">以下感測器已設為停用，但這次的檔案有停用日之後的資料：' + esc(plan.revived.map(function (x) { return x.id + ' ' + x.name + '（停用日 ' + Core.toRoc(x.retiredFrom) + '）'; }).join('、')) + '。資料照樣匯入；如果感測器其實還在使用，請到「⑤ 感測器編號與名稱」清除停用日。</div>';
+      if (plan.absent.length) {
+        html += '<div class="dupbox" id="absentBox"><b>⚠ 這次匯入的月份缺少 ' + plan.absent.length + ' 台感測器的資料</b>（之前有匯入過這幾台）。請逐台選擇：<table style="margin-top:6px"><tr><th class="l">感測器</th><th>缺少的月份</th><th class="l">處理方式</th></tr>' + plan.absent.map(function (x) {
+          var nm = 'ab_' + x.id;
+          var rd = x.lastTs ? Core.addDays(x.lastTs.slice(0, 10), 1) : '', ad = x.nextTs ? x.nextTs.slice(0, 10) : '';
+          var h = '<tr><td class="l">' + esc(x.id) + '<br><span class="hint">' + esc(x.name) + '</span></td><td>' + x.months.map(rocMonth).join('、') + '</td><td class="l" style="white-space:normal">' +
+            '<label class="opt"><input type="radio" name="' + nm + '" value="later" checked> 資料少匯入，之後再補（「② 資料異常確認」會繼續列為缺漏）</label>';
+          if (rd) h += '<label class="opt"><input type="radio" name="' + nm + '" value="retire"> 感測器已停用，停用日 <input type="date" data-abd="retire" data-id="' + esc(x.id) + '" value="' + rd + '"> <span class="hint">（最後一筆資料 ' + esc(fmtTs(x.lastTs)) + '）</span></label>';
+          if (ad) h += '<label class="opt"><input type="radio" name="' + nm + '" value="notyet"> 那時還沒啟用，啟用日 <input type="date" data-abd="notyet" data-id="' + esc(x.id) + '" value="' + ad + '"> <span class="hint">（第一筆資料 ' + esc(fmtTs(x.nextTs)) + '）</span></label>';
+          return h + '</td></tr>';
+        }).join('') + '</table><span class="hint">停用日當天起、啟用日前一天以前，報表不列空白日、也不列為缺漏。之後可在「⑤ 感測器編號與名稱」修改。</span></div>';
+      }
       if (!dupN) html += '<div class="row"><button id="confirmImport" class="primary">確認匯入</button><button id="cancelImport">取消</button></div>';
     }
     html += '</div>';
@@ -277,20 +292,47 @@
     if ($('cancelImport')) $('cancelImport').addEventListener('click', function () { state.pending = null; $('importPreview').innerHTML = ''; });
   }
 
+  function readAbsentChoices() {
+    var out = {};
+    if (!state.pending) return out;
+    (state.pending.plan.absent || []).forEach(function (x) {
+      var r = document.querySelector('input[name="ab_' + x.id + '"]:checked');
+      if (!r || r.value === 'later') return;
+      var inp = document.querySelector('input[data-abd="' + r.value + '"][data-id="' + x.id + '"]');
+      if (inp && inp.value) out[x.id] = { kind: r.value, date: inp.value };
+    });
+    return out;
+  }
+  /** 把「已停用／尚未啟用」的選擇併進匯入的寫入動作 */
+  function applyAbsentChoices(plan, sensors, choices) {
+    var msgs = [];
+    Object.keys(choices).forEach(function (id) {
+      var op = plan.ops.find(function (o) { return o.store === 'sensors' && o.value.id === id; });
+      var base = op ? op.value : (sensors.find(function (x) { return x.id === id; }) || { id: id, label: '', name: id });
+      var v = {}; Object.keys(base).forEach(function (k) { v[k] = base[k]; });
+      var c = choices[id];
+      if (c.kind === 'retire') v.retiredFrom = c.date; else v.activeFrom = c.date;
+      if (op) op.value = v; else plan.ops.push({ store: 'sensors', type: 'put', value: v });
+      msgs.push(esc(id + ' ' + (v.name || id)) + (c.kind === 'retire' ? ' 設為停用（' + Core.toRoc(c.date) + ' 起）' : ' 設定啟用日 ' + Core.toRoc(c.date)));
+    });
+    return msgs.length ? '已設定：' + msgs.join('；') + '。' : '';
+  }
   function doImport(skipExisting) {
     if (state.loadError || !state.pending || !state.pending.plan.ok) return;
     var btn = skipExisting ? $('skipImport') : $('confirmImport'), label = btn.textContent;
     ['confirmImport', 'skipImport', 'cancelImport'].forEach(function (id) { if ($(id)) $(id).disabled = true; });
     btn.textContent = '寫入中…';
+    var choices = readAbsentChoices();
     // 寫入前以最新資料重新規劃，避免兩個分頁同時操作
     Store.loadAll().then(function (d) {
       var plan = M.planImport(state.pending.results.filter(function (r) { return r.result; }), d.chunks, d.sensors, { skipExisting: skipExisting });
       if (!plan.ok) throw new Error('資料有重複，請重新選擇檔案。');
+      plan.lifeMsg = applyAbsentChoices(plan, d.sensors, choices);
       return Store.writeBatch(plan.ops).then(function () { return plan; });
     }).then(function (plan) {
       state.pending = null;
       return reload().then(function () { // 先重新載入，再算待確認筆數（否則會算到匯入前的舊資料）
-        $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆' + (skipExisting ? '、略過重複 ' + plan.stats.skipped + ' 筆（保留原本的資料）' : '、覆蓋 ' + plan.stats.overwritten + ' 筆') + '。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div></div>';
+        $('importPreview').innerHTML = '<div class="card"><div class="msg ok">匯入完成：新增 ' + plan.stats.added + ' 筆' + (skipExisting ? '、略過重複 ' + plan.stats.skipped + ' 筆（保留原本的資料）' : '、覆蓋 ' + plan.stats.overwritten + ' 筆') + '。可到「③ 已匯入資料」確認月份，或到「④ 產出報表」下載。' + reviewHint() + '</div>' + (plan.lifeMsg ? '<div class="msg info">' + plan.lifeMsg + '</div>' : '') + '</div>';
       });
     }).catch(function (e) {
       ['confirmImport', 'skipImport', 'cancelImport'].forEach(function (id) { if ($(id)) $(id).disabled = false; });
@@ -406,7 +448,7 @@
     var pend = M.reviewItems(state.chunks, review()).items.filter(function (it) {
       var d = it.ts.slice(0, 10); return it.status !== 'confirmed' && d >= r.from && d <= r.to;
     }).length;
-    if (pend) html += '<div class="msg err">這個期間還有 <b>' + pend + '</b> 個備註時段尚未確認，報表會先採用月報原始數值。請到「② 備註時段確認」確認。</div>';
+    if (pend) html += '<div class="msg err">這個期間還有 <b>' + pend + '</b> 個備註時段尚未確認，報表會先採用月報原始數值。請到「② 資料異常確認」確認。</div>';
     if (missing.length === need.length) { html += '<div class="msg err">這個期間沒有任何已匯入的資料。</div>'; setDl(false); }
     else {
       if (missing.length) html += '<div class="msg warn">以下月份尚未匯入：' + missing.map(rocMonth).join('、') + '。報表會缺這些月份。</div>';
@@ -432,13 +474,14 @@
       var rep = Core.buildReports(sensors, r, {
         fillMissingDays: $('optFill').checked,
         importedMonths: allMonths(),
-        zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked
+        zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked,
+        noise: settings().noise
       });
       var rows = (kind === 'air' ? rep.air : rep.noise).map(function (x) { x.id = reportId(x.id); return x; });
       rows.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
       if (!rows.length) throw new Error(kind === 'air' ? '這個期間沒有空品資料。' : '這個期間沒有噪音資料。');
       var std = stdValues();
-      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked, std: std }) : X.buildNoiseWorkbook(ExcelJS, rows);
+      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked, std: std }) : X.buildNoiseWorkbook(ExcelJS, rows, { periods: Core.describeNoise(settings().noise) });
       return wb.xlsx.writeBuffer().then(function (buf) {
         var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : '';
         var name = pc + (kind === 'air' ? '空氣品質日均報表_' : '噪音Leq日晚夜報表_') + r.label + '_' + stamp() + '.xlsx';
@@ -504,6 +547,39 @@
           '<td class="l"><input type="text" class="namein" data-id="' + esc(s.id) + '" value="' + esc(s.name) + '"></td></tr>';
       }).join('') + '</table>';
   }
+  function renderLife() {
+    var list = allSensorMeta();
+    if (!list.length) { $('life').innerHTML = '<p class="hint">尚未匯入任何資料。</p>'; return; }
+    var span = {};
+    state.chunks.forEach(function (c) {
+      if (!c.rows.length) return;
+      var x = span[c.id] || (span[c.id] = { a: c.rows[0].ts, b: c.rows[c.rows.length - 1].ts });
+      if (c.rows[0].ts < x.a) x.a = c.rows[0].ts; if (c.rows[c.rows.length - 1].ts > x.b) x.b = c.rows[c.rows.length - 1].ts;
+    });
+    $('life').innerHTML = '<table><tr><th>月報感測器編號</th><th class="l">名稱</th><th>已匯入的資料</th><th>啟用日</th><th>停用日</th><th>狀態</th></tr>' + list.map(function (s) {
+      var sp = span[s.id];
+      var st = s.retiredFrom ? '<span class="tag warn">已停用</span>' : '<span class="tag ok">使用中</span>';
+      return '<tr><td>' + esc(s.id) + '</td><td class="l">' + esc(s.name) + '</td><td>' + (sp ? esc(fmtTs(sp.a)) + '<br>～ ' + esc(fmtTs(sp.b)) : '（無）') + '</td>' +
+        '<td><input type="date" class="lifeA" data-id="' + esc(s.id) + '" value="' + esc(s.activeFrom || '') + '"></td><td><input type="date" class="lifeR" data-id="' + esc(s.id) + '" value="' + esc(s.retiredFrom || '') + '"></td><td>' + st + '</td></tr>';
+    }).join('') + '</table>';
+  }
+  $('saveLife').addEventListener('click', function () {
+    if (state.loadError) return;
+    var ops = [], bad = [];
+    allSensorMeta().forEach(function (s) {
+      var a = document.querySelector('.lifeA[data-id="' + s.id + '"]').value || '', r = document.querySelector('.lifeR[data-id="' + s.id + '"]').value || '';
+      if (a && r && r <= a) { bad.push(s.id); return; }
+      if (a === (s.activeFrom || '') && r === (s.retiredFrom || '')) return;
+      var v = {}; Object.keys(s).forEach(function (k) { v[k] = s[k]; });
+      if (a) v.activeFrom = a; else delete v.activeFrom;
+      if (r) v.retiredFrom = r; else delete v.retiredFrom;
+      ops.push({ store: 'sensors', type: 'put', value: v });
+    });
+    if (bad.length) { $('lifeMsg').innerHTML = '<span class="msg err">停用日要晚於啟用日：' + esc(bad.join('、')) + '</span>'; return; }
+    if (!ops.length) { $('lifeMsg').innerHTML = '<span class="msg info">沒有任何變更。</span>'; return; }
+    Store.writeBatch(ops).then(reload).then(function () { renderLife(); $('lifeMsg').innerHTML = '<span class="msg ok">已儲存 ' + ops.length + ' 台。報表與「② 資料異常確認」已套用。</span>'; })
+      .catch(function (e) { $('lifeMsg').innerHTML = '<span class="msg err">儲存失敗：' + esc(e.message || e) + '</span>'; });
+  });
   $('saveNames').addEventListener('click', function () {
     if (state.loadError) return;
     var rows = [];
@@ -611,7 +687,7 @@
     return { PM10: typeof sd.PM10 === 'number' ? sd.PM10 : 75, PM25: typeof sd.PM25 === 'number' ? sd.PM25 : 30 };
   }
   function safeName(t) { return String(t).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40); }
-  function repOpts() { return { zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked, auto: settings().auto }; }
+  function repOpts() { return { zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked, auto: settings().auto, noise: settings().noise }; }
   /** 全部資料跑完整流程（備註確認 → 手動 → 疑似異常自動判定）；結果快取到下一次重新載入 */
   var procCache = null;
   function proc() {
@@ -637,7 +713,7 @@
   }
   function reviewHint() {
     var n = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
-    return n ? '<br><b>有 ' + n + ' 個備註時段需要確認</b>，請到「② 備註時段確認」。' : '';
+    return n ? '<br><b>有 ' + n + ' 個備註時段需要確認</b>，請到「② 資料異常確認」。' : '';
   }
   function refreshReviewBadge() {
     var n = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
@@ -735,6 +811,7 @@
   function renderReview() {
     var all = M.reviewItems(state.chunks, review());
     var todo = all.items.filter(function (it) { return it.status !== 'confirmed'; }).length;
+    setTimeout(renderOverview, 0);
     $('reviewSummary').innerHTML = '<div class="msg ' + (todo ? 'err' : 'ok') + '">待確認 <b>' + todo + '</b> 筆（紅框）、已確認 ' + (all.items.length - todo) + ' 筆。' +
       '另有 ' + all.autoInvalid + ' 個備註時段的數值本來就全部是異常值（負值或空白），已自動不列入計算，不需確認。</div>';
     var base = baseFiltered(all);
@@ -997,6 +1074,7 @@
     sgShown = list.filter(function (g) { return (!fs || g.id === fs) && (!fr || g.rule === fr); });
     var cnt = { pending: 0, exclude: 0, keep: 0 };
     groups.forEach(function (g) { cnt[sgStatus(g)]++; });
+    setTimeout(renderOverview, 0);
     $('sgSummary').innerHTML = '<div class="msg ' + (cnt.pending ? 'warn' : 'ok') + '">待確認 <b>' + cnt.pending + '</b> 段（目前預設不採用）、已確認不採用 ' + cnt.exclude + ' 段、已改回採用 ' + cnt.keep + ' 段。</div>';
     $('sgBatch').hidden = !sgShown.length; $('sgSelBar').hidden = !sgShown.length;
     setTimeout(updateSgSel, 0);
@@ -1217,6 +1295,68 @@
       .then(function () { $('mnAdd').disabled = false; });
   });
   function fmtTs(t) { return Core.toRoc(t.slice(0, 10)) + ' ' + t.slice(11); }
+
+  // ---------------- 資料缺漏與無效測值、總覽 ----------------
+  var gapCache = null;
+  function gaps() { if (!gapCache) gapCache = M.dataIssues(state.chunks, state.sensors); return gapCache; }
+  var GAP_KIND = { month: '整月沒有資料', missing: '缺少小時', blank: '測值空白或無效' };
+  function refreshGapBadge() {
+    var n = gaps().filter(function (g) { return g.kind !== 'blank'; }).length;
+    $('gapBadge').hidden = !n; $('gapBadge').textContent = '缺 ' + n;
+    $('gapBadge').title = n + ' 段資料缺漏（整月沒有資料或缺少小時）';
+    renderOverview();
+  }
+  function renderGaps() {
+    var all = gaps(), kk = $('gpKind').value, ks = $('gpSensor').value, km = $('gpMonth').value;
+    var bs = {}, bm = {};
+    all.forEach(function (g) { if (!kk || g.kind === kk) { bs[g.id] = (bs[g.id] || 0) + 1; bm[g.month] = (bm[g.month] || 0) + 1; } });
+    $('gpSensor').innerHTML = '<option value="">全部</option>' + Object.keys(bs).sort().map(function (id) { return '<option value="' + esc(id) + '">' + esc(id + ' ' + sensorName(id)) + '（' + bs[id] + '）</option>'; }).join('');
+    $('gpMonth').innerHTML = '<option value="">全部</option>' + Object.keys(bm).sort().map(function (m) { return '<option value="' + m + '">' + esc(Core.toRoc(m + '-01').slice(0, -3)) + '（' + bm[m] + '）</option>'; }).join('');
+    $('gpSensor').value = bs[ks] ? ks : ''; $('gpMonth').value = bm[km] ? km : '';
+    ks = $('gpSensor').value; km = $('gpMonth').value;
+    var list = all.filter(function (g) { return (!kk || g.kind === kk) && (!ks || g.id === ks) && (!km || g.month === km); });
+    var c = { month: 0, missing: 0, blank: 0 }, hc = { month: 0, missing: 0, blank: 0 };
+    all.forEach(function (g) { c[g.kind]++; hc[g.kind] += g.hours; });
+    $('gpSummary').innerHTML = '<div class="msg ' + (c.month || c.missing ? 'warn' : 'info') + '">整月沒有資料 <b>' + c.month + '</b> 段、缺少小時 <b>' + c.missing + '</b> 段（' + hc.missing + ' 小時）、測值空白或無效 <b>' + c.blank + '</b> 段（' + hc.blank + ' 小時）。' +
+      (c.month || c.missing ? '「整月沒有資料」「缺少小時」請確認是不是漏匯入或月報本身就缺；要補的話重新匯入該月月報即可。感測器已撤掉或當時還沒裝的，請到「⑤ 感測器編號與名稱」設定停用日／啟用日，就不會再列出。' : '沒有缺少的月份或小時。') + '</div>';
+    if (!list.length) { $('gpList').innerHTML = '<p class="hint">沒有符合條件的資料。</p>'; return; }
+    var LIMIT = 300;
+    $('gpList').innerHTML = '<table><tr><th>類型</th><th>感測器</th><th>時間</th><th>小時</th><th class="l">測項</th><th class="l">月報備註</th></tr>' + list.slice(0, LIMIT).map(function (g) {
+      var fl = g.kind === 'month' ? '全部' : g.kind === 'missing' ? '整列沒有（' + g.fields.map(function (f) { return LABEL[f]; }).join('、') + '）' : g.fields.map(function (f) { return LABEL[f]; }).join('、');
+      var nt = g.notes.length ? esc(g.notes.slice(0, 4).join('、') + (g.notes.length > 4 ? '…等 ' + g.notes.length + ' 種' : '')) + '<br><span class="hint">其中 ' + g.noted + ' 小時有寫備註</span>' : '<span class="hint">（沒有備註）</span>';
+      return '<tr><td><span class="tag ' + (g.kind === 'blank' ? 'gray' : 'warn') + '">' + GAP_KIND[g.kind] + '</span></td><td>' + esc(g.id) + '<br><span class="hint">' + esc(sensorName(g.id)) + '</span></td><td>' + fmtTs(g.from) + (g.from === g.to ? '' : '<br>～ ' + fmtTs(g.to)) + '</td><td>' + g.hours + '</td><td class="l" style="white-space:normal;max-width:220px">' + fl + '</td><td class="l" style="white-space:normal;min-width:200px;max-width:340px">' + nt + '</td></tr>';
+    }).join('') + '</table>' + (list.length > LIMIT ? '<p class="msg warn">共 ' + list.length + ' 段，只列出前 ' + LIMIT + ' 段，請用上方篩選。</p>' : '');
+  }
+  ['gpKind', 'gpSensor', 'gpMonth'].forEach(function (id) { $(id).addEventListener('change', renderGaps); });
+  function pmRuleCounts() {
+    var zero = 0, ratio = 0;
+    state.chunks.forEach(function (c) {
+      if (c.fields.indexOf('PM10') < 0 && c.fields.indexOf('PM25') < 0) return;
+      c.rows.forEach(function (r) {
+        var a = Core.validValue(r.v.PM10), b = Core.validValue(r.v.PM25);
+        if (a === 0 || b === 0) zero++;
+        if (a !== null && b !== null && a !== 0 && b !== 0 && b > a) ratio++;
+      });
+    });
+    return { zero: zero, ratio: ratio };
+  }
+  function renderOverview() {
+    if (!state.chunks || !state.chunks.length) { $('ovList').innerHTML = '<p class="hint">尚未匯入任何資料。</p>'; return; }
+    var todo = M.reviewItems(state.chunks, review()).items.filter(function (it) { return it.status !== 'confirmed'; }).length;
+    var sg = { pending: 0, exclude: 0, keep: 0 }; proc().groups.forEach(function (g) { sg[sgStatus(g)]++; });
+    var gp = { month: 0, missing: 0, blank: 0 }, gh = { missing: 0, blank: 0 }; gaps().forEach(function (g) { gp[g.kind]++; if (gh[g.kind] !== undefined) gh[g.kind] += g.hours; });
+    var pm = pmRuleCounts(), mn = manual().length;
+    function item(target, cls, html) { if (!target) return '<div class="ov msg ' + cls + '">' + html + '</div>'; return '<button type="button" class="ov msg ' + cls + '" data-go="' + target + '">' + html + '</button>'; }
+    $('ovList').innerHTML =
+      item('rvCard', todo ? 'err' : 'ok', '① 月報備註時段：待確認 <b>' + todo + '</b> 筆' + (todo ? '（需要您確認）' : '（都確認完了）')) +
+      item('suspectCard', sg.pending ? 'warn' : 'ok', '② 疑似異常（數值不合理）：待確認 <b>' + sg.pending + '</b> 段（目前預設不採用）、已確認不採用 ' + sg.exclude + ' 段、已改回採用 ' + sg.keep + ' 段') +
+      item('gapCard', gp.month || gp.missing ? 'warn' : 'info', '③ 資料缺漏：整月沒有資料 <b>' + gp.month + '</b> 段、缺少小時 <b>' + gp.missing + '</b> 段（' + gh.missing + ' 小時）；測值空白或無效 ' + gp.blank + ' 段（' + gh.blank + ' 小時，自動不計）') +
+      item('', 'info', '④ 自動不計的測值：PM 為 0 共 ' + pm.zero + ' 小時、PM2.5 大於 PM10 共 ' + pm.ratio + ' 小時（兩者不計）。這兩項可在「④ 產出報表」取消勾選。') +
+      item('mnCard', 'info', '⑤ 手動不採用時段：' + mn + ' 段');
+  }
+  $('ovList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-go]'); if (b) $(b.dataset.go).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
   function renderManualList() {
     var list = manual();
     if (!list.length) { $('mnList').innerHTML = '<p class="hint">尚未設定。</p>'; return; }
@@ -1329,5 +1469,70 @@
       $('clrBox').hidden = true; $('clrYes').disabled = false; refreshStorage();
       $('clrMsg').innerHTML = '<div class="msg ok">' + (clrMode === 'proj' ? '目前計畫的資料已清除。' : '全部計畫與資料已清除。') + '</div>';
     }).catch(function (e) { $('clrYes').disabled = false; $('clrMsg').innerHTML = '<div class="msg err">清除失敗：' + esc(e.message || e) + '</div>'; });
+  });
+
+  // ---------------- 噪音日／晚／夜時段設定 ----------------
+  function isDefaultNoise(cfg) { return JSON.stringify(Core.noiseCfg(cfg)) === JSON.stringify(Core.noiseCfg(null)); }
+  function renderNoiseNow() {
+    var cfg = settings().noise, def = isDefaultNoise(cfg);
+    $('noiseNow').innerHTML = '<h2>噪音時段（產出噪音報表前請確認）</h2><div class="' + (def ? 'info' : 'msg warn') + '">目前設定' + (def ? '（出廠預設）' : '（<b>已自訂</b>）') + '：' + esc(Core.describeNoise(cfg)) +
+      '</div><div class="row"><button type="button" id="goNoise">到「⑦ 噪音時段設定」修改</button></div>';
+    $('goNoise').onclick = function () { document.querySelector('.tabs button[data-tab="noise"]').click(); window.scrollTo(0, 0); };
+  }
+  var noiseDraft = null;
+  var NKEYS = ['DAY', 'EVE', 'NIGHT'];
+  var NOISE_PRESETS = {
+    std: { name: '出廠預設（同日：日 06–20、晚 20–22、夜 00–06＋22–24）', cfg: Core.DEFAULT_NOISE },
+    cross: { name: '夜間跨日（日 07–19、晚 19–22、夜 22–翌日 07）', cfg: { DAY: [{ fd: 0, fh: 7, td: 0, th: 19 }], EVE: [{ fd: 0, fh: 19, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 22, td: 1, th: 7 }] } },
+    cross2: { name: '夜間跨日（日 06–20、晚 20–22、夜 22–翌日 06）', cfg: { DAY: [{ fd: 0, fh: 6, td: 0, th: 20 }], EVE: [{ fd: 0, fh: 20, td: 0, th: 22 }], NIGHT: [{ fd: 0, fh: 22, td: 1, th: 6 }] } }
+  };
+  function hourOpts(sel, max) { var h = ''; for (var i = 0; i <= max; i++) h += '<option value="' + i + '"' + (i === sel ? ' selected' : '') + '>' + Core.pad(i) + ':00</option>'; return h; }
+  function dayOpts(sel) { return '<option value="0"' + (sel === 0 ? ' selected' : '') + '>當日</option><option value="1"' + (sel === 1 ? ' selected' : '') + '>翌日</option>'; }
+  function renderNoiseForm(keepDraft) {
+    if (!keepDraft || !noiseDraft) noiseDraft = JSON.parse(JSON.stringify(Core.noiseCfg(settings().noise)));
+    var h = '';
+    NKEYS.forEach(function (k) {
+      h += '<div class="nperiod"><b>' + Core.NOISE_LABEL[k] + '</b>';
+      noiseDraft[k].forEach(function (g, i) {
+        h += '<div class="row nseg">' + (i ? '＋ ' : '') + '<select data-nk="' + k + '" data-ni="' + i + '" data-nf="fd">' + dayOpts(g.fd) + '</select>' +
+          '<select data-nk="' + k + '" data-ni="' + i + '" data-nf="fh">' + hourOpts(g.fh, 23) + '</select> ～ ' +
+          '<select data-nk="' + k + '" data-ni="' + i + '" data-nf="td">' + dayOpts(g.td) + '</select>' +
+          '<select data-nk="' + k + '" data-ni="' + i + '" data-nf="th">' + hourOpts(g.th, 24) + '</select>' +
+          (noiseDraft[k].length > 1 ? ' <button type="button" data-ndel="' + k + '|' + i + '">刪除這段</button>' : '') + '</div>';
+      });
+      if (noiseDraft[k].length < 3) h += '<button type="button" data-nadd="' + k + '">＋ 再加一段</button>';
+      h += '</div>';
+    });
+    $('noiseForm').innerHTML = h;
+    var chk = Core.checkNoise(noiseDraft);
+    var saved = settings().noise, html = '<div class="' + (isDefaultNoise(saved) ? 'info' : 'msg warn') + '">目前計畫已儲存的設定' + (isDefaultNoise(saved) ? '＝<b>出廠預設</b>（日 06–20、晚 20–22、夜＝當日 00–06 加 22–24，和原本 Access 報表相同）' : '＝<b>已自訂</b>：' + esc(Core.describeNoise(saved))) + '</div>' + '<div class="info">下方編輯中的設定，以 8/1 為例：' + esc(Core.describeNoise(noiseDraft)) + '<br><span class="hint">「結束」那一點不含在內，例如 06:00～20:00＝06 點到 19 點共 14 小時。24:00＝隔天 00:00。</span></div>';
+    if (chk.errors.length) html += '<div class="msg err">' + chk.errors.map(esc).join('<br>') + '</div>';
+    if (chk.warnings.length) html += '<div class="msg warn">' + chk.warnings.map(esc).join('<br>') + '</div>';
+    $('noiseCheck').innerHTML = html;
+    $('noiseSave').disabled = !chk.ok || !!state.loadError;
+  }
+  $('noiseForm').addEventListener('change', function (e) {
+    var t = e.target; if (!t.dataset.nk) return;
+    noiseDraft[t.dataset.nk][+t.dataset.ni][t.dataset.nf] = +t.value;
+    $('noiseMsg').innerHTML = ''; renderNoiseForm(true);
+  });
+  $('noiseForm').addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.dataset.nadd) { var k = t.dataset.nadd, last = noiseDraft[k][noiseDraft[k].length - 1]; noiseDraft[k].push({ fd: last.td, fh: last.th % 24, td: last.td, th: Math.min(24, last.th % 24 + 1) }); renderNoiseForm(true); }
+    if (t.dataset.ndel) { var p = t.dataset.ndel.split('|'); noiseDraft[p[0]].splice(+p[1], 1); renderNoiseForm(true); }
+  });
+  $('noisePresets').addEventListener('click', function (e) {
+    var k = e.target.dataset.np; if (!k) return;
+    noiseDraft = JSON.parse(JSON.stringify(NOISE_PRESETS[k].cfg)); renderNoiseForm(true);
+    $('noiseMsg').innerHTML = '<span class="msg info">已套用「' + esc(NOISE_PRESETS[k].name) + '」，按「儲存時段設定」才會生效。</span>';
+  });
+  $('noisePresets').innerHTML = Object.keys(NOISE_PRESETS).map(function (k) { return '<button type="button" data-np="' + k + '">' + esc(NOISE_PRESETS[k].name) + '</button>'; }).join('');
+  $('noiseSave').addEventListener('click', function () {
+    if (state.loadError || !Core.checkNoise(noiseDraft).ok) return;
+    var v = {}; Object.keys(settings()).forEach(function (k) { v[k] = settings()[k]; }); v.noise = JSON.parse(JSON.stringify(noiseDraft));
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).then(reload).then(function () {
+      renderNoiseForm();
+      $('noiseMsg').innerHTML = '<span class="msg ok">已儲存（只套用在目前計畫）。之後下載的噪音報表會用新的時段計算。</span>';
+    }).catch(function (er) { $('noiseMsg').innerHTML = '<span class="msg err">儲存失敗：' + esc(er.message || er) + '</span>'; });
   });
 })();

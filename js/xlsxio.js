@@ -94,7 +94,8 @@
     return wb;
   }
 
-  function buildNoiseWorkbook(ExcelJS, rows) {
+  function buildNoiseWorkbook(ExcelJS, rows, opts) {
+    opts = opts || {};
     var wb = new ExcelJS.Workbook();
     var ws = wb.addWorksheet('噪音Leq日晚夜');
     ws.addRow(['感測器編號', '感測器名稱', '日期', 'Leq日', 'Leq晚', 'Leq夜', '備註']);
@@ -102,6 +103,12 @@
     ws.getColumn(3).numFmt = 'yyyy/mm/dd';
     for (var c = 4; c <= 6; c++) ws.getColumn(c).numFmt = '0.0';
     styleSheet(ws, [12, 16, 12, 9, 9, 9, 44]);
+    if (opts.periods) {
+      var info = wb.addWorksheet('時段說明');
+      info.addRow(['本報表的日／晚／夜時段（以 8/1 為例，結束時間不含）']);
+      opts.periods.split('；').forEach(function (t) { info.addRow([t]); });
+      info.getColumn(1).width = 70; info.getRow(1).font = { bold: true };
+    }
     return wb;
   }
 

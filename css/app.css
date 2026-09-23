@@ -107,3 +107,10 @@ table.rv tr.pending.sel td{background:#f3e6ef}
 body.busy-cursor, body.busy-cursor *{cursor:progress !important}
 .dupbox{border:2px solid #d9a441;background:#fff6e0;color:#4a3000;border-radius:8px;padding:10px 14px;margin:8px 0}
 .dupbox ul{margin:4px 0 6px;padding-left:20px}
+.nperiod{border-left:4px solid var(--line);padding:4px 10px;margin:8px 0}
+.nseg select{margin:0 2px}
+#noisePresets button{font-size:14px}
+.badge.grayb{background:#5a6878}
+.ov{display:block;text-align:left;width:100%;margin:4px 0;padding:8px 12px}
+.ov b{font-size:16px}
+.tag.gray{background:#eceff3;color:#3d4957}

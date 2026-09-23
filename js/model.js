@@ -79,19 +79,69 @@
       ops.push({ store: 'chunks', type: 'put', value: { key: ck, id: inc.id, month: inc.month, fields: Object.keys(fields), rows: rows } });
       (months[inc.month] = months[inc.month] || {})[inc.id] = true;
     });
-    var newSensors = [];
+    var newSensors = [], newInfo = [];
+    var storedMonths = {}, lastTs = {}, storedIds = {};
+    chunks.forEach(function (c) {
+      storedMonths[c.month] = true; storedIds[c.id] = true;
+      var t = c.rows.length ? c.rows[c.rows.length - 1].ts : null;
+      if (t && (!lastTs[c.id] || t > lastTs[c.id])) lastTs[c.id] = t;
+    });
+    var firstIn = {};
+    Object.keys(incoming).forEach(function (ck) {
+      var inc = incoming[ck];
+      Object.keys(inc.rows).forEach(function (ts) { if (!firstIn[inc.id] || ts < firstIn[inc.id]) firstIn[inc.id] = ts; });
+    });
     Object.keys(sensorsSeen).forEach(function (id) {
       var s = sensorsSeen[id];
       if (!known[id]) {
         newSensors.push(id);
-        ops.push({ store: 'sensors', type: 'put', value: { id: id, label: s.label, name: s.defaultName || id } });
+        var nv = { id: id, label: s.label, name: s.defaultName || id };
+        // 新感測器：若之前已匯入過更早的月份，從第一筆資料那天起算「啟用」，之前的月份不算缺漏
+        var fd = firstIn[id] ? firstIn[id].slice(0, 10) : null;
+        var earlier = fd && Object.keys(storedMonths).concat(Object.keys(incoming).map(function (ck) { return incoming[ck].month; })).some(function (m) { return m < fd.slice(0, 7); });
+        if (earlier || (fd && fd.slice(8) !== '01')) nv.activeFrom = fd;
+        newInfo.push({ id: id, name: nv.name, activeFrom: nv.activeFrom || null, first: firstIn[id] || null });
+        ops.push({ store: 'sensors', type: 'put', value: nv });
       } else if (s.label && known[id].label !== s.label) {
-        var keep = { id: id, label: s.label, name: known[id].name };
-        if (known[id].reportId) keep.reportId = known[id].reportId;
+        var keep = {}; Object.keys(known[id]).forEach(function (k) { keep[k] = known[id][k]; });
+        keep.label = s.label;
         ops.push({ store: 'sensors', type: 'put', value: keep });
       }
     });
-    return { ok: errors.length === 0, errors: errors, ops: errors.length ? [] : ops, stats: stats, months: months, newSensors: newSensors, dupMonths: dupMonths };
+    // 已知（有資料）的感測器，這次匯入的月份卻沒有它的資料 → 可能少匯入，或感測器已停用
+    var absent = [], revived = [];
+    var inMonths = {}; Object.keys(incoming).forEach(function (ck) { inMonths[incoming[ck].month] = true; });
+    var allIds = {}; Object.keys(storedIds).forEach(function (id) { allIds[id] = true; }); Object.keys(sensorsSeen).forEach(function (id) { allIds[id] = true; });
+    var newAct = {}; newInfo.forEach(function (x) { if (x.activeFrom) newAct[x.id] = x.activeFrom; });
+    function lastBefore(id, m) {
+      var best = null, lim = m + '-01 00:00';
+      chunks.forEach(function (c) { if (c.id !== id || c.month >= m) return; var t = c.rows.length ? c.rows[c.rows.length - 1].ts : null; if (t && (!best || t > best)) best = t; });
+      Object.keys(incoming).forEach(function (ck) { var inc = incoming[ck]; if (inc.id !== id || inc.month >= m) return; Object.keys(inc.rows).forEach(function (t) { if (t < lim && (!best || t > best)) best = t; }); });
+      return best;
+    }
+    function firstAfter(id, m) {
+      var best = null;
+      chunks.forEach(function (c) { if (c.id !== id || c.month <= m || !c.rows.length) return; var t = c.rows[0].ts; if (!best || t < best) best = t; });
+      Object.keys(incoming).forEach(function (ck) { var inc = incoming[ck]; if (inc.id !== id || inc.month <= m) return; Object.keys(inc.rows).forEach(function (t) { if (!best || t < best) best = t; }); });
+      return best;
+    }
+    Object.keys(allIds).sort().forEach(function (id) {
+      var k = known[id] || { activeFrom: newAct[id] }, ms = [];
+      Object.keys(inMonths).sort().forEach(function (m) {
+        if (incoming[id + '|' + m] || byKey[id + '|' + m]) return;
+        if (k.retiredFrom && k.retiredFrom <= m + '-01') return;
+        if (k.activeFrom && k.activeFrom.slice(0, 7) > m) return;
+        if (!known[id] && !newAct[id] && firstIn[id] && firstIn[id].slice(0, 7) > m) return;
+        ms.push(m);
+      });
+      if (ms.length) absent.push({ id: id, name: k.name || (sensorsSeen[id] && sensorsSeen[id].defaultName) || id, months: ms, lastTs: lastBefore(id, ms[0]), nextTs: firstAfter(id, ms[ms.length - 1]), retiredFrom: k.retiredFrom || null });
+    });
+    Object.keys(sensorsSeen).forEach(function (id) {
+      var k = known[id];
+      if (k && k.retiredFrom && firstIn[id] && Object.keys(incoming).some(function (ck) { var inc = incoming[ck]; return inc.id === id && Object.keys(inc.rows).some(function (ts) { return ts.slice(0, 10) >= k.retiredFrom; }); }))
+        revived.push({ id: id, name: k.name || id, retiredFrom: k.retiredFrom });
+    });
+    return { ok: errors.length === 0, errors: errors, ops: errors.length ? [] : ops, stats: stats, months: months, newSensors: newSensors, newInfo: newInfo, absent: absent, revived: revived, dupMonths: dupMonths };
   }
 
   /** 把 chunks 整理成 buildReports 要的感測器清單 */
@@ -104,7 +154,7 @@
         var mEnd = c.month + '-31', mStart = c.month + '-01';
         if (mEnd < range.from || mStart > range.to) return;
       }
-      var s = by[c.id] || (by[c.id] = { id: c.id, name: (meta[c.id] && meta[c.id].name) || c.id, fields: {}, rows: [] });
+      var s = by[c.id] || (by[c.id] = { id: c.id, name: (meta[c.id] && meta[c.id].name) || c.id, fields: {}, rows: [], activeFrom: (meta[c.id] && meta[c.id].activeFrom) || null, retiredFrom: (meta[c.id] && meta[c.id].retiredFrom) || null });
       c.fields.forEach(function (f) { s.fields[f] = true; });
       Array.prototype.push.apply(s.rows, c.rows);
     });
@@ -179,7 +229,7 @@
         if (r.note) o.note = r.note;
         return o;
       });
-      return { id: s.id, name: s.name, fields: s.fields, rows: rows };
+      return { id: s.id, name: s.name, fields: s.fields, rows: rows, activeFrom: s.activeFrom || null, retiredFrom: s.retiredFrom || null };
     });
   }
 
@@ -204,7 +254,7 @@
         if (r.xf) o.xf = r.xf;
         return o;
       });
-      return { id: s.id, name: s.name, fields: s.fields, rows: rows };
+      return { id: s.id, name: s.name, fields: s.fields, rows: rows, activeFrom: s.activeFrom || null, retiredFrom: s.retiredFrom || null };
     });
   }
 
@@ -288,8 +338,9 @@
       if (!has[r.src]) noData.push(r.src);
       if (oldRid === r.rid && oldName === name) { same++; return; }
       changes.push({ src: r.src, oldRid: oldRid, rid: r.rid, oldName: oldName, name: name });
-      var v = { id: r.src, label: c.label || '', name: name };
-      if (r.rid !== r.src) v.reportId = r.rid;
+      var v = {}; Object.keys(c).forEach(function (k) { v[k] = c[k]; });
+      v.id = r.src; v.label = c.label || ''; v.name = name;
+      if (r.rid !== r.src) v.reportId = r.rid; else delete v.reportId;
       ops.push({ store: 'sensors', type: 'put', value: v });
     });
     var byRid = {};
@@ -471,7 +522,7 @@
         if (r.mf) o.mf = r.mf;
         return o;
       });
-      return any ? { id: s.id, name: s.name, fields: s.fields, rows: rows } : s;
+      return any ? { id: s.id, name: s.name, fields: s.fields, rows: rows, activeFrom: s.activeFrom || null, retiredFrom: s.retiredFrom || null } : s;
     });
   }
 
@@ -482,7 +533,67 @@
     return { sensors: applyAuto(base, groups, decisions), groups: groups, base: base };
   }
 
-  var api = { detectSuspects: detectSuspects, applyAuto: applyAuto, processAll: processAll, DEFAULT_AUTO: DEFAULT_AUTO, autoCfg: autoCfg, ruleLabel: ruleLabel, counted: counted, parseMapping: parseMapping, planMapping: planMapping, applyManual: applyManual, manualImpact: manualImpact, rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
+  /**
+   * 資料缺漏與無效測值（只提供資訊，這些小時本來就不列入計算）。
+   * 回傳 [{kind:'month'|'missing'|'blank', id, month, from, to, hours, fields:[...], noted, notes:[...]}]
+   *  month：某感測器在「已匯入的月份」完全沒有資料；missing：月報少了這些小時（整列沒有）；
+   *  blank：有這一列，但測值是空白、負值或文字。
+   */
+  function dataIssues(chunks, sensorMeta) {
+    var life = {}; (sensorMeta || []).forEach(function (x) { life[x.id] = x; });
+    var Vv = (root.EnvCore || require('./core.js')).validValue;
+    var months = {}, by = {};
+    chunks.forEach(function (c) { months[c.month] = true; (by[c.id] = by[c.id] || {})[c.month] = c; });
+    var mlist = Object.keys(months).sort(), out = [];
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    Object.keys(by).sort().forEach(function (id) {
+      mlist.forEach(function (m) {
+        var y = +m.slice(0, 4), mo = +m.slice(5, 7), nd = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+        var c = by[id][m], L = life[id] || {};
+        var inLife = function (ts) { return (!L.activeFrom || ts.slice(0, 10) >= L.activeFrom) && (!L.retiredFrom || ts.slice(0, 10) < L.retiredFrom); };
+        if (L.retiredFrom && L.retiredFrom <= m + '-01') { if (!c) return; }
+        if (L.activeFrom && L.activeFrom > m + '-' + p2(nd)) { if (!c) return; }
+        if (!c && ((L.activeFrom && L.activeFrom > m + '-01') || (L.retiredFrom && L.retiredFrom <= m + '-' + p2(nd)))) {
+          // 這個月只有一部分在啟用期間內：只列啟用期間內的小時
+          var f0 = null, t0 = null, n0 = 0;
+          for (var dd = 1; dd <= nd; dd++) { var ds = m + '-' + p2(dd); if (inLife(ds + ' 00:00')) { if (!f0) f0 = ds + ' 00:00'; t0 = ds + ' 23:00'; n0 += 24; } }
+          if (n0) out.push({ kind: 'month', id: id, month: m, from: f0, to: t0, hours: n0, fields: [], noted: 0, notes: [], sig: 'month' });
+          return;
+        }
+        if (!c) { out.push({ kind: 'month', id: id, month: m, from: m + '-01 00:00', to: m + '-' + p2(nd) + ' 23:00', hours: nd * 24, fields: [], noted: 0, notes: [], sig: 'month' }); return; }
+        var fields = c.fields.filter(function (f) { return REVIEW_FIELDS.indexOf(f) >= 0; });
+        var have = {}; c.rows.forEach(function (r) { have[r.ts] = r; });
+        var cur = null;
+        function flush() { if (cur) { out.push(cur); cur = null; } }
+        for (var d = 1; d <= nd; d++) for (var h = 0; h < 24; h++) {
+          var ts = m + '-' + p2(d) + ' ' + p2(h) + ':00', r = have[ts];
+          var kind = null, bad = [];
+          if (!r && !inLife(ts)) { flush(); continue; }
+          if (!r) kind = 'missing';
+          else { bad = fields.filter(function (f) { return Vv(r.v[f]) === null; }); if (bad.length) kind = 'blank'; }
+          var sig = kind ? kind + '|' + bad.join(',') : '';
+          if (!kind) { flush(); continue; }
+          if (cur && cur.sig === sig) { cur.to = ts; cur.hours++; }
+          else { flush(); cur = { kind: kind, id: id, month: m, from: ts, to: ts, hours: 1, fields: kind === 'missing' ? fields.slice() : bad, noted: 0, notes: [], sig: kind === 'missing' ? 'missing|' + fields.join(',') : sig }; }
+          if (r && r.note) { cur.noted++; if (cur.notes.indexOf(r.note) < 0) cur.notes.push(r.note); }
+        }
+        flush();
+      });
+    });
+    // 跨月連續的同一段合併
+    var merged = [];
+    function nextHour(ts) { var t = new Date(Date.UTC(+ts.slice(0, 4), +ts.slice(5, 7) - 1, +ts.slice(8, 10), +ts.slice(11, 13) + 1)); return t.toISOString().slice(0, 10) + ' ' + t.toISOString().slice(11, 16); }
+    out.forEach(function (x) {
+      var L = merged[merged.length - 1];
+      if (L && L.id === x.id && L.sig === x.sig && x.kind !== 'month' && nextHour(L.to) === x.from) {
+        L.to = x.to; L.hours += x.hours; L.noted += x.noted; x.notes.forEach(function (n) { if (L.notes.indexOf(n) < 0) L.notes.push(n); });
+      } else merged.push(x);
+    });
+    merged.forEach(function (x) { delete x.sig; });
+    return merged;
+  }
+
+  var api = { dataIssues: dataIssues, detectSuspects: detectSuspects, applyAuto: applyAuto, processAll: processAll, DEFAULT_AUTO: DEFAULT_AUTO, autoCfg: autoCfg, ruleLabel: ruleLabel, counted: counted, parseMapping: parseMapping, planMapping: planMapping, applyManual: applyManual, manualImpact: manualImpact, rowSig: rowSig, reviewItems: reviewItems, applyExclusions: applyExclusions, REVIEW_FIELDS: REVIEW_FIELDS, planImport: planImport, sensorsFromChunks: sensorsFromChunks, coverage: coverage, monthsInRange: monthsInRange, sameRow: sameRow };
   root.EnvModel = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
