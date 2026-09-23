@@ -2,6 +2,6 @@
 
 請先讀 `README.md` 的「給維護者（含 AI）：常見維護事項」。
 
-- 環境部測站資料（⑨ 分頁自動抓取）抓不到、環境部網址變更或金鑰失效：修改 `js/trend.js` 的 `DEFAULT_API`、`DEFAULT_KEY`（資料集 AQX_P_221，https://data.moenv.gov.tw/dataset/detail/AQX_P_221）。
+- 環境部測站資料（⑨ 分頁自動抓取）抓不到、環境部網址變更或金鑰失效：修改 `js/trend.js` 的 `DEFAULT_API`、`STATIONS_API`、`DEFAULT_KEY`、`DATASET_OVERRIDE`（各測站資料集代碼＝aqx_p_(188＋測站編號)，例：彰化站 AQX_P_221，https://data.moenv.gov.tw/dataset/detail/AQX_P_221）。
 - 每次修改：跑 `node --test tests/unit.test.js`；更新 `js/version.js`、`CHANGELOG.md`、`使用說明.html` 頁尾，以及 `index.html` 所有 `?v=` 參數。
 - 使用者是中文使用者；不要把真實監測資料放進 repository。

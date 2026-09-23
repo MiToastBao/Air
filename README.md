@@ -36,15 +36,16 @@
 
 ## 給維護者（含 AI）：常見維護事項
 
-### 環境部測站資料抓不到（⑨ 環境部比對趨勢圖 → 從環境部網站自動抓取）
+### 環境部測站資料抓不到（⑨ 環境部比對趨勢圖）
 
-- 網址與金鑰寫在 **`js/trend.js`** 的 `DEFAULT_API`、`DEFAULT_KEY`（畫面上沒有設定欄位，刻意由維護者修改）。
-- 目前使用環境部環境資料開放平臺的資料集 **AQX_P_221**（空氣品質小時值_彰化縣_彰化站），說明頁：https://data.moenv.gov.tw/dataset/detail/AQX_P_221
-- `DEFAULT_API` 是網址範本，`{key}`、`{from}`、`{to}`、`{item}`、`{offset}` 由程式代入：金鑰、月初（例 `2026-04-01 00:00`）、下個月初、`PM10`／`PM2.5`、翻頁位置（每頁 1000 筆）。回傳必須是 JSON 陣列，欄位含 `itemengname`、`monitordate`、`concentration`（不分大小寫，另可有 `sitename`）；解析在 `parseMoenvJson`。
+- 網址與金鑰寫在 **`js/trend.js`**：`DEFAULT_API`（各測站小時值）、`STATIONS_API`（測站清單，資料集 AQX_P_07）、`DEFAULT_KEY`（畫面上沒有設定欄位，刻意由維護者修改）。
+- 各測站一個資料集「空氣品質小時值_縣市_站名」，代碼＝`aqx_p_`（188＋測站編號），例：彰化站編號 33 → AQX_P_221（https://data.moenv.gov.tw/dataset/detail/AQX_P_221）。不符合規則的測站寫在 `DATASET_OVERRIDE`（`{測站編號: '資料集代碼'}`）；抓到的測站對不上時畫面會提示。
+- `DEFAULT_API` 的 `{dataset}`、`{key}`、`{from}`、`{to}`、`{offset}` 由程式代入（月初 `2026-04-01 00:00`、下個月初、翻頁位置，每頁 1000 筆）。回傳必須是 JSON 陣列，欄位含 `siteid`、`sitename`、`itemengname`、`monitordate`、`concentration`（不分大小寫）；解析在 `parseMoenvJson`／`fromRecords`。
+- 資料存在 IndexedDB 的 meta：`moe|測站編號|YYYY-MM`（原始字串，含 x 等無效標記）、`moeSites`（圖例名稱）、`moeStations`（測站清單快取）。v1.12 以前的 `moenv`（只有彰化站 PM10、PM2.5）開啟 ⑨ 時自動轉換（`migrateLegacy`）。
 - `DEFAULT_KEY` 是環境部「透過API下載歷史資料操作手冊」裡的範例金鑰；若被停用，請使用者到平臺註冊會員取得自己的金鑰後替換。
-- 瀏覽器端直接呼叫（2026-09 實測 CORS 可用）；金鑰錯誤時瀏覽器只回報「Failed to fetch」。
+- 瀏覽器端直接呼叫（2026-09 實測 CORS 可用）；金鑰錯誤時瀏覽器只回報「Failed to fetch」。短時間大量請求會被環境部暫時擋下。
 - 修改後請跑 `node --test tests/unit.test.js`，並更新 `js/version.js`、`CHANGELOG.md`、`index.html` 的 `?v=` 版本參數。
-- 抓不到時使用者可改用「下載 CSV 後匯入」，格式相同（`parseMoenvCsv`）。
+- 抓不到時使用者可改用「自行匯入環境部 CSV 檔」，格式相同（`parseMoenvCsv`）。
 
 ### 其他
 

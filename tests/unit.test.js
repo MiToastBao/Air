@@ -561,27 +561,6 @@ test('盒鬚圖 Excel：每個測項一張原生盒鬚圖（chartEx），資料�
   assert.equal(wb.getWorksheet('統計').getRow(2).getCell(3).value, 3);
 });
 
-test('環境部小時值 CSV：只讀 PM10、PM2.5，x 等無效值不計，英文或中文測項名稱都認得；日平均四捨五入到 1 位', () => {
-  const T = require('../js/trend.js');
-  const csv = '﻿siteid,sitename,county,itemid,itemname,itemengname,itemunit,monitordate,concentration\n' +
-    '1,Test,"T County",4,PM10,PM10,μg/m3,"2026-04-01 00:00",18\n' +
-    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 00:00",13\n' +
-    '1,Test,"T County",3,Ozone,O3,ppb,"2026-04-01 00:00",21\n' +
-    '1,測試,測試縣,4,懸浮微粒,PM10,μg/m3,"2026-04-01 01:00",11\n' +
-    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 01:00",x\n' +
-    '1,Test,"T County",4,PM10,PM10,μg/m3,"2026-04-02 00:00",20\n';
-  const p = T.parseMoenvCsv(csv);
-  assert.equal(p.ok, true);
-  assert.deepEqual(p.hours['2026-04-01 01:00'], { PM10: 11, PM25: null });
-  assert.deepEqual([p.invalid.PM25, p.total.PM10, p.months.join()], [1, 3, '2026-04']);
-  const d = T.moenvDaily(p.hours, '2026-04-01', '2026-04-30');
-  assert.deepEqual(d['2026-04-01'], { PM10: 14.5, PM25: 13 });
-  assert.deepEqual(d['2026-04-02'], { PM10: 20, PM25: null });
-  assert.equal(T.parseMoenvCsv('a,b\n1,2').ok, false);
-  const m = T.mergeMoenv({ hours: p.hours }, T.parseMoenvCsv(csv.replace('",18', '",19')));
-  assert.deepEqual([m.added, m.replaced, m.hours['2026-04-01 00:00'].PM10], [0, 3, 19]);
-});
-
 test('趨勢圖：Y 軸自動上限不為少數異常高值拉高；Excel 折線圖環境部紅色粗線、資料範圍正確', async () => {
   const T = require('../js/trend.js');
   const vals = Array.from({ length: 200 }, (_, i) => 10 + (i % 20));
@@ -608,21 +587,68 @@ test('趨勢圖：Y 軸自動上限不為少數異常高值拉高；Excel 折線
   assert.deepEqual([ws.getCell('B1').value, ws.getCell('C1').value, ws.getCell('B3').value, ws.getCell('C3').value], ['感測器A', '環境部測站', null, 2]);
 });
 
-test('環境部自動抓取：網址範本代入金鑰、月份、測項，每頁 1000 筆自動翻頁，只留該月份', async () => {
+
+test('環境部小時值 CSV：全部測項原樣保存（含 x 無效標記），依測站、月份分開；日平均四捨五入到 1 位、雨量加總', () => {
   const T = require('../js/trend.js');
-  const u = T.apiUrl('https://x/api?k={key}&f={from}&t={to}&i={item}&o={offset}&filters=a|b', { key: 'K 1', from: '2026-04-01 00:00', to: '2026-05-01 00:00', item: 'PM2.5', offset: 1000 });
-  assert.equal(u, 'https://x/api?k=K%201&f=2026-04-01%2000%3A00&t=2026-05-01%2000%3A00&i=PM2.5&o=1000&filters=a%7Cb');
+  const csv = '\uFEFFsiteid,sitename,county,itemid,itemname,itemengname,itemunit,monitordate,concentration\n' +
+    '1,Test,"T County",4,PM10,PM10,μg/m3,"2026-04-01 00:00",18\n' +
+    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 00:00",13\n' +
+    '1,Test,"T County",1,Sulfur dioxide,SO2,ppb,"2026-04-01 00:00",1.1\n' +
+    '1,測試,測試縣,4,懸浮微粒,PM10,μg/m3,"2026-04-01 01:00",11\n' +
+    '1,Test,"T County",33,PM2.5,PM2.5,μg/m3,"2026-04-01 01:00",x\n' +
+    '2,Other,"O County",4,PM10,PM10,μg/m3,"2026-05-02 00:00",20\n';
+  const p = T.parseMoenvCsv(csv);
+  assert.equal(p.ok, true);
+  assert.deepEqual(Object.keys(p.chunks).sort(), ['1|2026-04', '2|2026-05']);
+  const c = p.chunks['1|2026-04'];
+  assert.deepEqual([c.sitename, c.county, c.items.PM10.itemname, c.items.SO2.itemunit], ['測試', '測試縣', '懸浮微粒', 'ppb']);
+  assert.deepEqual(c.rows['2026-04-01 01:00'], { PM10: '11', 'PM2.5': 'x' });
+  assert.deepEqual([p.total, p.invalid], [6, 1]);
+  const h = T.stationHours([c], 'PM10', '2026-04-01', '2026-04-30');
+  assert.deepEqual(T.dailyOf(h), { '2026-04-01': 14.5 });
+  assert.deepEqual(T.dailyOf({ '2026-04-01 00:00': 1.25, '2026-04-01 01:00': 2 }, true), { '2026-04-01': 3.3 });
+  // 合併：同小時同測項以新的為準
+  const m = T.mergeChunk(c, T.parseMoenvCsv(csv.replace('",18', '",19')).chunks['1|2026-04']);
+  assert.deepEqual([m.added, m.replaced, m.chunk.rows['2026-04-01 00:00'].PM10], [0, 5, '19']);
+  // 原始數據下載：欄位與環境部 CSV 相同，x 原樣保留
+  const raw = T.rawRows([c], '2026-04', '2026-04');
+  assert.equal(raw.length, 5);
+  const out = T.toCsv(raw);
+  assert.ok(out.startsWith('\uFEFFsiteid,sitename,county,itemid,itemname,itemengname,itemunit,monitordate,concentration\n'));
+  assert.ok(out.includes(',PM2.5,μg/m3,2026-04-01 01:00,x'));
+  assert.equal(T.parseMoenvCsv('a,b\n1,2').ok, false);
+  // 舊版格式轉換
+  const L = T.migrateLegacy({ label: 'X', hours: { '2026-04-01 00:00': { PM10: 18, PM25: null } } });
+  assert.deepEqual(L[0].rows['2026-04-01 00:00'], { PM10: '18', 'PM2.5': 'x' });
+  assert.equal(L[0].siteid, '33');
+});
+
+test('環境部自動抓取：資料集代碼＝aqx_p_(188＋測站編號)、每頁 1000 筆自動翻頁、測站對不上時提示', async () => {
+  const T = require('../js/trend.js');
+  assert.equal(T.datasetOf('33'), 'aqx_p_221');
+  assert.equal(T.datasetOf(35), 'aqx_p_223');
+  const u = T.apiUrl(T.DEFAULT_API, { key: 'K', from: '2026-04-01 00:00', to: '2026-05-01 00:00', offset: 1000, dataset: 'aqx_p_221' });
+  assert.ok(u.startsWith('https://data.moenv.gov.tw/api/v2/aqx_p_221?format=json&limit=1000&offset=1000&api_key=K&filters=monitordate,GR,2026-04-01%2000%3A00%7Cmonitordate,LT,2026-05-01%2000%3A00'), u);
   const calls = [];
   const fake = url => {
     calls.push(url);
-    const item = /i=([^&]+)/.exec(url)[1], off = +/o=(\d+)/.exec(url)[1];
-    const n = item === 'PM10' ? (off === 0 ? 1000 : 3) : 2;
-    return Promise.resolve(Array.from({ length: n }, (_, i) => ({ ItemEngName: decodeURIComponent(item), MonitorDate: '2026-04-' + String(1 + Math.floor((off + i) / 24) % 28).padStart(2, '0') + ' ' + String((off + i) % 24).padStart(2, '0') + ':00', Concentration: i === 0 ? 'x' : '10', SiteName: '彰化' })).concat(off === 0 && item === 'PM10' ? [] : [{ itemengname: 'PM10', monitordate: '2026-05-01 00:00', concentration: '5' }]));
+    const off = +/offset=(\d+)/.exec(url)[1], n = off === 0 ? 1000 : 500;
+    return Promise.resolve(Array.from({ length: n }, (_, i) => { const k = off + i, item = ['PM10', 'PM2.5', 'SO2'][k % 3], hr = Math.floor(k / 3);
+      return { SiteId: '33', SiteName: '彰化', ItemEngName: item, MonitorDate: '2026-04-' + String(1 + Math.floor(hr / 24)).padStart(2, '0') + ' ' + String(hr % 24).padStart(2, '0') + ':00', Concentration: '5' }; }));
   };
-  const p = await T.fetchMonth(fake, 'https://x/api?k={key}&f={from}&t={to}&i={item}&o={offset}', 'K', '2026-04');
-  assert.equal(calls.length, 3); // PM10 兩頁、PM2.5 一頁
-  assert.deepEqual(p.months, ['2026-04']);
-  assert.ok(Object.keys(p.hours).every(t => t.startsWith('2026-04')));
-  assert.equal(p.sites['彰化'] > 0, true);
-  await assert.rejects(T.fetchMonth(() => Promise.resolve({ error: 'bad key' }), 'https://x?{from}{to}{item}{offset}{key}', '', '2026-04'), /不是資料/);
+  const r = await T.fetchMonth(fake, T.DEFAULT_API, 'K', '33', '2026-04');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes('aqx_p_221'));
+  assert.deepEqual(Object.keys(r.chunk.items).sort(), ['PM10', 'PM2.5', 'SO2']);
+  assert.equal(Object.keys(r.chunk.rows).length, 500);
+  await assert.rejects(T.fetchMonth(() => Promise.resolve([{ siteid: '34', sitename: '線西', itemengname: 'PM10', monitordate: '2026-04-01 00:00', concentration: '1' }]), T.DEFAULT_API, 'K', '33', '2026-04'), /對不上/);
+  await assert.rejects(T.fetchMonth(() => Promise.resolve({ error: 'bad key' }), T.DEFAULT_API, 'K', '33', '2026-04'), /不是資料/);
+});
+
+test('月報解析：氣體類欄位（SO2、NO2、NO、NOx、CO、CO2、O3…）也能辨識', () => {
+  ['SO2 ppb', 'SO₂', 'NO2', 'NOx ppb', 'NO ppb', 'CO ppm', 'CO2 ppm', 'O3 ppb', '臭氧', 'CH4'].forEach((h, i) => assert.equal(P.classifyHeader(h), ['SO2', 'SO2', 'NO2', 'NOX', 'NO', 'CO', 'CO2', 'O3', 'O3', 'CH4'][i], h));
+  assert.equal(P.classifyHeader('COM'), null);
+  const r = P.parseWorkbook([sheet('9000030', ['DateTime', 'SO2 ppb', 'PM10 ug/m3', '氣體感測器9000030'], [[U(2026, 7, 1, 0), 3.5, 20, null]])]);
+  assert.deepEqual(r.sensors[0].fields.sort(), ['PM10', 'SO2']);
+  assert.equal(r.sensors[0].rows[0].v.SO2, 3.5);
 });

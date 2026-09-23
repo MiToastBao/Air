@@ -22,7 +22,8 @@
   var NOISE_FIELDS = ['LEQ', 'LMAX'];
   var FIELD_LABEL = {
     TMP: 'TMP', HUM: 'HUM', PM10: 'PM10', PM25: 'PM2.5', TVOC: 'TVOC',
-    WS: 'WS', WD: 'WD', RA: '雨量', LEQ: 'Leq', LMAX: 'Leq(max)'
+    WS: 'WS', WD: 'WD', RA: '雨量', LEQ: 'Leq', LMAX: 'Leq(max)',
+    SO2: 'SO2', NO2: 'NO2', NO: 'NO', NOX: 'NOx', CO: 'CO', CO2: 'CO2', O3: 'O3', NMHC: 'NMHC', THC: 'THC', CH4: 'CH4'
   };
   var DIR16 = ['北', '北北東', '東北', '東北東', '東', '東南東', '東南', '南南東',
     '南', '南南西', '西南', '西南西', '西', '西北西', '西北', '北北西'];

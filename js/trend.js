@@ -5,7 +5,9 @@
   'use strict';
   var Core = root.EnvCore || (typeof require !== 'undefined' ? require('./core.js') : null);
 
-  // ---------------- CSV ----------------
+  // ---------------- 環境部測站資料 ----------------
+  // 儲存方式：每站每月一筆 { siteid, sitename, county, month, items:{英文測項:{itemid,itemname,itemunit}}, rows:{ts:{英文測項: 原始字串}} }
+  // 原始數值照原樣保存（包含 x、#、* 等無效標記），下載原始數據時原樣輸出；畫圖時才轉成數字。
   function splitCsv(text) {
     var rows = [], row = [], cur = '', q = false;
     for (var i = 0; i < text.length; i++) {
@@ -32,106 +34,201 @@
     var p = function (x) { return (x.length < 2 ? '0' : '') + x; };
     return m[1] + '-' + p(m[2]) + '-' + p(m[3]) + ' ' + p(m[4]) + ':00';
   }
-  /**
-   * 環境部「空氣品質小時值」CSV（siteid, sitename, county, itemid, itemname, itemengname, itemunit, monitordate, concentration）
-   * 回傳 { ok, error, sites:{名稱:筆數}, hours:{ts:{PM10, PM25}}, invalid:{PM10,PM25}, total:{PM10,PM25}, months:[] }
-   */
+  function normItem(v) { return String(v || '').trim(); }
+  var RAW_COLS = ['siteid', 'sitename', 'county', 'itemid', 'itemname', 'itemengname', 'itemunit', 'monitordate', 'concentration'];
+  /** 共同處理：records = [{siteid, sitename, county, itemid, itemname, itemengname, itemunit, monitordate, concentration}] */
+  function fromRecords(recs) {
+    var out = { ok: true, chunks: {}, stations: {}, badTime: 0, total: 0, invalid: 0 };
+    recs.forEach(function (x) {
+      var eng = normItem(x.itemengname || x.itemname);
+      if (!eng) return;
+      var ts = normTs(x.monitordate);
+      if (!ts) { out.badTime++; return; }
+      var sid = String(x.siteid || x.sitename || '').trim() || '?';
+      var ym = ts.slice(0, 7), key = sid + '|' + ym;
+      var c = out.chunks[key] || (out.chunks[key] = { siteid: sid, sitename: '', county: '', month: ym, items: {}, rows: {} });
+      var sn = String(x.sitename || '').trim(), cn = String(x.county || '').trim();
+      if (sn && (!c.sitename || /[一-鿿]/.test(sn))) c.sitename = sn; // 有中文名稱就用中文
+      if (cn && (!c.county || /[一-鿿]/.test(cn))) c.county = cn;
+      var it = c.items[eng] || (c.items[eng] = { itemid: '', itemname: '', itemunit: '' });
+      if (x.itemid !== undefined && x.itemid !== '') it.itemid = String(x.itemid);
+      if (x.itemname && (!it.itemname || /[一-鿿]/.test(x.itemname))) it.itemname = String(x.itemname).trim();
+      if (x.itemunit) it.itemunit = String(x.itemunit).trim();
+      var raw = x.concentration === undefined || x.concentration === null ? '' : String(x.concentration).trim();
+      (c.rows[ts] = c.rows[ts] || {})[eng] = raw;
+      out.total++; if (num(raw) === null) out.invalid++;
+      out.stations[sid] = { siteid: sid, sitename: c.sitename, county: c.county };
+    });
+    return out;
+  }
+  /** 環境部「空氣品質小時值」CSV */
   function parseMoenvCsv(text) {
     text = String(text).replace(/^﻿/, '');
     var rows = splitCsv(text);
     if (!rows.length) return { ok: false, error: '檔案是空的。' };
     var h = rows[0].map(function (x) { return x.trim().toLowerCase(); });
     var ci = function (names) { for (var i = 0; i < names.length; i++) { var k = h.indexOf(names[i]); if (k >= 0) return k; } return -1; };
-    var cItem = ci(['itemengname', 'itemname', '測項', '測項英文名稱']), cDate = ci(['monitordate', 'datacreationdate', '監測日期', '日期']), cVal = ci(['concentration', '濃度', '數值']), cSite = ci(['sitename', '測站名稱', '測站']);
-    if (cItem < 0 || cDate < 0 || cVal < 0) return { ok: false, error: '看不懂這個檔案的欄位。請使用環境部「空氣品質小時值」下載的 CSV（要有 itemengname、monitordate、concentration 欄）。' };
+    var col = { siteid: ci(['siteid', '測站代碼']), sitename: ci(['sitename', '測站名稱', '測站']), county: ci(['county', '縣市']), itemid: ci(['itemid']), itemname: ci(['itemname', '測項名稱']),
+      itemengname: ci(['itemengname', '測項英文名稱']), itemunit: ci(['itemunit', '單位']), monitordate: ci(['monitordate', '監測日期', '日期']), concentration: ci(['concentration', '濃度', '數值']) };
+    if ((col.itemengname < 0 && col.itemname < 0) || col.monitordate < 0 || col.concentration < 0) return { ok: false, error: '看不懂這個檔案的欄位。請使用環境部「空氣品質小時值」下載的 CSV（要有 itemengname、monitordate、concentration 欄）。' };
     var recs = [];
-    for (var r = 1; r < rows.length; r++) recs.push({ item: rows[r][cItem], date: rows[r][cDate], value: rows[r][cVal], site: cSite >= 0 ? rows[r][cSite] : '' });
-    return fromRecords(recs);
+    for (var r = 1; r < rows.length; r++) { var o = {}; RAW_COLS.forEach(function (k) { o[k] = col[k] >= 0 ? rows[r][col[k]] : ''; }); recs.push(o); }
+    var out = fromRecords(recs);
+    if (!Object.keys(out.chunks).length) return { ok: false, error: '檔案裡沒有可讀取的資料。' };
+    return out;
   }
-  /** API 回傳的 JSON 陣列（欄位名稱不分大小寫：itemengname、monitordate、concentration、sitename） */
+  /** API 回傳的 JSON 陣列（欄位名稱不分大小寫） */
   function parseMoenvJson(arr) {
     if (!Array.isArray(arr)) return { ok: false, error: '回傳的不是資料清單。' };
-    var recs = arr.map(function (o) {
-      var g = {}; Object.keys(o || {}).forEach(function (k) { g[k.toLowerCase()] = o[k]; });
-      return { item: g.itemengname !== undefined ? g.itemengname : g.itemname, date: g.monitordate, value: g.concentration, site: g.sitename };
-    });
-    return fromRecords(recs, true);
+    return fromRecords(arr.map(function (o) { var g = {}; Object.keys(o || {}).forEach(function (k) { g[k.toLowerCase()] = o[k]; }); return g; }));
   }
-  function fromRecords(recs, allowEmpty) {
-    var out = { ok: true, sites: {}, hours: {}, invalid: { PM10: 0, PM25: 0 }, total: { PM10: 0, PM25: 0 }, badTime: 0 };
-    for (var r = 0; r < recs.length; r++) {
-      var x = recs[r];
-      var item = String(x.item || '').trim().toUpperCase().replace(/\s/g, '');
-      var f = item === 'PM10' ? 'PM10' : (item === 'PM2.5' || item === 'PM25') ? 'PM25' : null;
-      if (!f) continue;
-      var ts = normTs(x.date);
-      if (!ts) { out.badTime++; continue; }
-      var sn = String(x.site || '').trim(); if (sn) out.sites[sn] = (out.sites[sn] || 0) + 1;
-      var v = num(x.value);
-      out.total[f]++;
-      if (v === null) out.invalid[f]++;
-      var o = out.hours[ts] || (out.hours[ts] = { PM10: null, PM25: null });
-      o[f] = v;
-    }
-    var ms = {}; Object.keys(out.hours).forEach(function (t) { ms[t.slice(0, 7)] = true; });
-    out.months = Object.keys(ms).sort();
-    if (!out.months.length && !allowEmpty) return { ok: false, error: '檔案裡沒有 PM10 或 PM2.5 的資料。' };
+  /** 把新解析的月份資料併入舊的（同一小時同一測項以新的為準） */
+  function mergeChunk(old, add) {
+    var c = { siteid: add.siteid, sitename: add.sitename || (old && old.sitename) || '', county: add.county || (old && old.county) || '', month: add.month, items: {}, rows: {} };
+    var added = 0, replaced = 0;
+    [old, add].forEach(function (x) { if (!x) return; Object.keys(x.items || {}).forEach(function (k) { c.items[k] = x.items[k]; }); });
+    Object.keys((old && old.rows) || {}).forEach(function (t) { c.rows[t] = {}; Object.keys(old.rows[t]).forEach(function (k) { c.rows[t][k] = old.rows[t][k]; }); });
+    Object.keys(add.rows).forEach(function (t) {
+      var r = c.rows[t] || (c.rows[t] = {});
+      Object.keys(add.rows[t]).forEach(function (k) { if (r[k] !== undefined) replaced++; else added++; r[k] = add.rows[t][k]; });
+    });
+    return { chunk: c, added: added, replaced: replaced };
+  }
+  /** 某站在期間內某測項的逐時數值 {ts: number|null} */
+  function stationHours(chunks, eng, from, to) {
+    var out = {};
+    chunks.forEach(function (c) {
+      Object.keys(c.rows).forEach(function (t) { var d = t.slice(0, 10); if (d < from || d > to) return; var v = c.rows[t][eng]; if (v !== undefined) out[t] = num(v); });
+    });
     return out;
   }
+  /** 日平均（當日有效小時平均，四捨五入到 1 位）；雨量為當日加總 */
+  function dailyOf(hours, sum) {
+    var by = {};
+    Object.keys(hours).forEach(function (t) { var d = t.slice(0, 10); var v = hours[t]; if (v === null || v === undefined) return; (by[d] = by[d] || []).push(v); });
+    var out = {}; Object.keys(by).forEach(function (d) { out[d] = sum ? Core.exactSum1(by[d]) : Core.exactMean1(by[d]); });
+    return out;
+  }
+  /** 月份統計：{ym: {hours, items:{英文測項: 有效筆數}}} */
+  function chunkSummary(c) {
+    var items = {}, hours = Object.keys(c.rows).length;
+    Object.keys(c.rows).forEach(function (t) { Object.keys(c.rows[t]).forEach(function (k) { items[k] = items[k] || { total: 0, valid: 0 }; items[k].total++; if (num(c.rows[t][k]) !== null) items[k].valid++; }); });
+    return { hours: hours, items: items };
+  }
+  /** 原始數據：長表（和環境部 CSV 同欄位）與寬表（日期時間 × 測項） */
+  function rawRows(chunks, fromYm, toYm) {
+    var list = [];
+    chunks.filter(function (c) { return c.month >= fromYm && c.month <= toYm; }).sort(function (a, b) { return a.month < b.month ? -1 : 1; }).forEach(function (c) {
+      Object.keys(c.rows).sort().forEach(function (t) {
+        Object.keys(c.rows[t]).forEach(function (k) {
+          var it = c.items[k] || {};
+          list.push({ siteid: c.siteid, sitename: c.sitename, county: c.county, itemid: it.itemid || '', itemname: it.itemname || '', itemengname: k, itemunit: it.itemunit || '', monitordate: t, concentration: c.rows[t][k] });
+        });
+      });
+    });
+    return list;
+  }
+  function toCsv(list) {
+    var q = function (v) { v = String(v === undefined || v === null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    return '﻿' + RAW_COLS.join(',') + '\n' + list.map(function (r) { return RAW_COLS.map(function (k) { return q(r[k]); }).join(','); }).join('\n') + '\n';
+  }
+  /** 下載原始數據的 Excel：「原始資料」長表、「逐時表」寬表（無效標記原樣保留） */
+  function buildRawWorkbook(ExcelJS, list, info) {
+    var wb = new ExcelJS.Workbook();
+    var ws = wb.addWorksheet('逐時表'), raw = wb.addWorksheet('原始資料');
+    var items = [], meta = {}, byTs = {};
+    list.forEach(function (r) {
+      if (items.indexOf(r.itemengname) < 0) { items.push(r.itemengname); meta[r.itemengname] = r; }
+      (byTs[r.monitordate] = byTs[r.monitordate] || {})[r.itemengname] = r.concentration;
+    });
+    ws.addRow(['日期時間'].concat(items.map(function (k) { var m = meta[k]; return k + (m.itemunit ? '（' + m.itemunit + '）' : ''); })));
+    Object.keys(byTs).sort().forEach(function (t) {
+      var p = t.split(/[- :]/).map(Number);
+      ws.addRow([new Date(Date.UTC(p[0], p[1] - 1, p[2], p[3], p[4]))].concat(items.map(function (k) { var v = byTs[t][k]; if (v === undefined) return null; var n = num(v); return n !== null ? n : v; })));
+    });
+    ws.getColumn(1).numFmt = 'yyyy/mm/dd hh:mm'; ws.getColumn(1).width = 17;
+    for (var i = 2; i <= items.length + 1; i++) ws.getColumn(i).width = 14;
+    ws.getRow(1).font = { bold: true }; ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+    raw.addRow(RAW_COLS);
+    list.forEach(function (r) { raw.addRow(RAW_COLS.map(function (k) { return String(r[k] === undefined ? '' : r[k]); })); });
+    raw.getRow(1).font = { bold: true }; [8, 10, 12, 8, 14, 14, 10, 18, 12].forEach(function (w, i) { raw.getColumn(i + 1).width = w; });
+    var ex = wb.addWorksheet('說明'); (info || []).forEach(function (t) { ex.addRow([t]); }); ex.getColumn(1).width = 100;
+    return wb;
+  }
+
   // ★ 維護重點：環境部自動抓取的網址與金鑰寫在這裡（畫面上沒有設定欄位）。
-  //   環境部改網址、金鑰失效而抓不到時，改 DEFAULT_API／DEFAULT_KEY 即可。詳見 README.md「給維護者（含 AI）」。
-  //   資料集 AQX_P_221：https://data.moenv.gov.tw/dataset/detail/AQX_P_221
-  var DEFAULT_API = 'https://data.moenv.gov.tw/api/v2/aqx_p_221?format=json&limit=1000&offset={offset}&api_key={key}&filters=monitordate,GR,{from}|monitordate,LT,{to}|itemengname,EQ,{item}';
+  //   環境部改網址、金鑰失效而抓不到時，改 DEFAULT_API／DEFAULT_KEY／STATIONS_API 即可。詳見 README.md「給維護者（含 AI）」。
+  //   各測站資料集代碼＝aqx_p_（188＋測站編號），例：彰化站編號 33 → AQX_P_221（https://data.moenv.gov.tw/dataset/detail/AQX_P_221）。
+  //   若有測站不符合這個規則，把「測站編號: '資料集代碼'」加到 DATASET_OVERRIDE。
+  var DEFAULT_API = 'https://data.moenv.gov.tw/api/v2/{dataset}?format=json&limit=1000&offset={offset}&api_key={key}&filters=monitordate,GR,{from}|monitordate,LT,{to}';
+  var STATIONS_API = 'https://data.moenv.gov.tw/api/v2/aqx_p_07?format=json&limit=1000&api_key={key}'; // 空氣品質監測站基本資料
   var DEFAULT_KEY = '540e2ca4-41e1-4186-8497-fdd67024ac44'; // 環境部「透過API下載歷史資料操作手冊」裡的範例金鑰；建議改用自己申請的
+  var DATASET_OVERRIDE = {};
+  var FALLBACK_STATIONS = [{ siteid: '33', sitename: '彰化', county: '彰化縣', sitetype: '一般站' }, { siteid: '34', sitename: '線西', county: '彰化縣', sitetype: '工業站' }, { siteid: '35', sitename: '二林', county: '彰化縣', sitetype: '一般站' }];
+  function datasetOf(siteid) { return DATASET_OVERRIDE[siteid] || ('aqx_p_' + (188 + Number(siteid))); }
   function apiUrl(tpl, o) {
-    return String(tpl).trim().replace(/\{(key|from|to|item|offset)\}/g, function (m, k) { return encodeURIComponent(k === 'key' ? (o.key || '') : String(o[k])); }).replace(/\|/g, '%7C');
+    return String(tpl).trim().replace(/\{(key|from|to|item|offset|dataset)\}/g, function (m, k) { return k === 'dataset' ? String(o.dataset) : encodeURIComponent(k === 'key' ? (o.key || '') : String(o[k])); }).replace(/\|/g, '%7C');
   }
   function nextMonth(ym) { var y = +ym.slice(0, 4), m = +ym.slice(5, 7) + 1; if (m > 12) { m = 1; y++; } return y + '-' + (m < 10 ? '0' : '') + m; }
-  /** 抓一個月的 PM10、PM2.5（每頁 1000 筆，自動翻頁）。fetchFn(url) → Promise<json> */
-  function fetchMonth(fetchFn, tpl, key, ym) {
-    var from = ym + '-01 00:00', to = nextMonth(ym) + '-01 00:00', all = [];
-    function page(item, off) {
-      return fetchFn(apiUrl(tpl, { key: key, from: from, to: to, item: item, offset: off })).then(function (j) {
+  /** 抓某站一個月的全部測項（每頁 1000 筆，自動翻頁）。fetchFn(url) → Promise<json>；回傳該月的 chunk（沒有資料時 rows 為空） */
+  function fetchMonth(fetchFn, tpl, key, siteid, ym) {
+    var from = ym + '-01 00:00', to = nextMonth(ym) + '-01 00:00', all = [], ds = datasetOf(siteid);
+    function page(off) {
+      return fetchFn(apiUrl(tpl, { key: key, from: from, to: to, offset: off, dataset: ds })).then(function (j) {
         if (!Array.isArray(j)) { var e = new Error('環境部回傳的不是資料：' + String(JSON.stringify(j)).slice(0, 200)); e.body = j; throw e; }
         all = all.concat(j);
-        if (j.length >= 1000 && off < 20000) return page(item, off + 1000);
+        if (j.length >= 1000 && off < 100000) return page(off + 1000);
       });
     }
-    return page('PM10', 0).then(function () { return page('PM2.5', 0); }).then(function () {
-      var p = parseMoenvJson(all);
-      var h = {}; Object.keys(p.hours).forEach(function (t) { if (t.slice(0, 7) === ym) h[t] = p.hours[t]; });
-      p.hours = h; p.months = Object.keys(h).length ? [ym] : [];
-      return p;
+    return page(0).then(function () {
+      var p = parseMoenvJson(all), keys = Object.keys(p.chunks);
+      var other = keys.filter(function (k) { return k.split('|')[0] !== String(siteid); });
+      if (other.length && keys.length === other.length) throw new Error('資料集 ' + ds + ' 回傳的是其他測站（' + other.map(function (k) { return p.chunks[k].sitename || k; }).join('、') + '）的資料，測站代碼對不上。請找 AI 協助修改 js/trend.js 的 DATASET_OVERRIDE。');
+      var c = p.chunks[String(siteid) + '|' + ym] || { siteid: String(siteid), sitename: '', county: '', month: ym, items: {}, rows: {} };
+      return { chunk: c, total: p.total, invalid: p.invalid };
     });
   }
-  /** 合併到已存的環境部資料：同一小時以新的為準 */
-  function mergeMoenv(store, parsed) {
-    var hours = {}, replaced = 0, added = 0;
-    Object.keys((store && store.hours) || {}).forEach(function (t) { hours[t] = store.hours[t]; });
-    Object.keys(parsed.hours).forEach(function (t) { if (hours[t]) replaced++; else added++; hours[t] = parsed.hours[t]; });
-    return { hours: hours, replaced: replaced, added: added };
-  }
-  function moenvMonths(hours) {
-    var m = {};
-    Object.keys(hours || {}).forEach(function (t) {
-      var k = t.slice(0, 7), o = m[k] || (m[k] = { hours: 0, PM10: 0, PM25: 0 });
-      o.hours++; if (hours[t].PM10 !== null) o.PM10++; if (hours[t].PM25 !== null) o.PM25++;
+  function fetchStations(fetchFn, key) {
+    return fetchFn(apiUrl(STATIONS_API, { key: key })).then(function (j) {
+      if (!Array.isArray(j) || !j.length) throw new Error('取不到測站清單。');
+      return j.map(function (o) { var g = {}; Object.keys(o).forEach(function (k) { g[k.toLowerCase()] = o[k]; }); return { siteid: String(g.siteid), sitename: g.sitename, county: g.county, sitetype: g.sitetype || '' }; })
+        .filter(function (s) { return s.siteid && s.sitename; });
     });
-    return m;
   }
-  /** 環境部日平均（當日有效小時的平均，四捨五入到小數 1 位，與報表相同） */
-  function moenvDaily(hours, from, to) {
-    var by = {};
-    Object.keys(hours || {}).forEach(function (t) {
-      var d = t.slice(0, 10); if (d < from || d > to) return;
-      var o = by[d] || (by[d] = { PM10: [], PM25: [] });
-      if (hours[t].PM10 !== null) o.PM10.push(hours[t].PM10);
-      if (hours[t].PM25 !== null) o.PM25.push(hours[t].PM25);
+  /** 舊版（v1.11～v1.12）只存彰化站 PM10、PM2.5：{label, hours:{ts:{PM10,PM25}}} → 新格式 */
+  function migrateLegacy(old) {
+    var chunks = {};
+    Object.keys((old && old.hours) || {}).forEach(function (t) {
+      var ym = t.slice(0, 7), c = chunks[ym] || (chunks[ym] = { siteid: '33', sitename: '彰化', county: '彰化縣', month: ym, items: { 'PM10': { itemid: '4', itemname: '懸浮微粒', itemunit: 'μg/m3' }, 'PM2.5': { itemid: '33', itemname: '細懸浮微粒', itemunit: 'μg/m3' } }, rows: {} });
+      var h = old.hours[t], r = {};
+      if (h.PM10 !== undefined) r['PM10'] = h.PM10 === null ? 'x' : String(h.PM10);
+      if (h.PM25 !== undefined) r['PM2.5'] = h.PM25 === null ? 'x' : String(h.PM25);
+      c.rows[t] = r;
     });
-    var out = {};
-    Object.keys(by).forEach(function (d) { out[d] = { PM10: Core.exactMean1(by[d].PM10), PM25: Core.exactMean1(by[d].PM25) }; });
-    return out;
+    return Object.keys(chunks).map(function (k) { return chunks[k]; });
   }
+
+  // 趨勢圖可選的測項：感測器欄位 ↔ 環境部英文測項
+  var TREND_ITEMS = [
+    { key: 'PM25', moe: 'PM2.5', label: 'PM2.5', unit: 'μg/m³', def: true },
+    { key: 'PM10', moe: 'PM10', label: 'PM10', unit: 'μg/m³', def: true },
+    { key: 'SO2', moe: 'SO2', label: 'SO₂', unit: 'ppb' },
+    { key: 'NO2', moe: 'NO2', label: 'NO₂', unit: 'ppb' },
+    { key: 'NO', moe: 'NO', label: 'NO', unit: 'ppb' },
+    { key: 'NOX', moe: 'NOx', label: 'NOx', unit: 'ppb' },
+    { key: 'CO', moe: 'CO', label: 'CO', unit: 'ppm' },
+    { key: 'O3', moe: 'O3', label: 'O₃', unit: 'ppb' },
+    { key: 'CO2', moe: 'CO2', label: 'CO₂', unit: 'ppm' },
+    { key: 'THC', moe: 'THC', label: 'THC', unit: 'ppm' },
+    { key: 'NMHC', moe: 'NMHC', label: 'NMHC', unit: 'ppm' },
+    { key: 'CH4', moe: 'CH4', label: 'CH₄', unit: 'ppm' },
+    { key: 'TVOC', moe: null, label: 'TVOC', unit: 'ppb' },
+    { key: 'TMP', moe: 'AMB_TEMP', label: '溫度', unit: '℃' },
+    { key: 'HUM', moe: 'RH', label: '相對濕度', unit: '%' },
+    { key: 'WS', moe: 'WIND_SPEED', label: '風速', unit: 'm/s' },
+    { key: 'RA', moe: 'RAINFALL', label: '雨量', unit: 'mm', sum: true }
+  ];
+  function unitText(u) { return String(u || '').replace(/m3\b/, 'm³').replace(/ug\//i, 'μg/'); }
 
   // ---------------- 趨勢圖 ----------------
   var FONT = '"Microsoft JhengHei","微軟正黑體","PingFang TC","Noto Sans CJK TC","Noto Sans TC",sans-serif';
@@ -361,7 +458,7 @@
     series.forEach(function (s) { s.values.forEach(function (v) { if (typeof v === 'number' && v > sc.max) cut++; }); });
     return { max: sc.max, cut: cut };
   }
-  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, fetchMonth: fetchMonth, apiUrl: apiUrl, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, nextMonth: nextMonth, parseMoenvCsv: parseMoenvCsv, mergeMoenv: mergeMoenv, moenvMonths: moenvMonths, moenvDaily: moenvDaily, drawTrend: drawTrend, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, splitCsv: splitCsv };
+  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, parseMoenvCsv: parseMoenvCsv, fetchMonth: fetchMonth, fetchStations: fetchStations, apiUrl: apiUrl, datasetOf: datasetOf, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, STATIONS_API: STATIONS_API, DATASET_OVERRIDE: DATASET_OVERRIDE, FALLBACK_STATIONS: FALLBACK_STATIONS, nextMonth: nextMonth, mergeChunk: mergeChunk, stationHours: stationHours, dailyOf: dailyOf, chunkSummary: chunkSummary, rawRows: rawRows, toCsv: toCsv, buildRawWorkbook: buildRawWorkbook, migrateLegacy: migrateLegacy, TREND_ITEMS: TREND_ITEMS, unitText: unitText, num: num, RAW_COLS: RAW_COLS, drawTrend: drawTrend, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, splitCsv: splitCsv };
   root.EnvTrend = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
