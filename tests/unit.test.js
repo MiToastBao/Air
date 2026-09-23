@@ -493,3 +493,22 @@ test('最頻風向：全天風速都 < 0.3（靜風）→「<0.3」；風向或�
   const ws = X.buildAirWorkbook(ExcelJS, air, {}).getWorksheet(1);
   assert.deepEqual([2, 3, 4].map(i => ws.getRow(i).getCell(10).value), ['<0.3', '－', '東']);
 });
+
+test('Excel：噪音 Leq 日／晚／夜超過標準（嚴格大於）才粗體＋底線，標準可自訂', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const rows = [
+    { id: 'N', name: 'N', date: '2026-07-01', DAY: 71, EVE: 69, NIGHT: 63, note: '' },
+    { id: 'N', name: 'N', date: '2026-07-02', DAY: 71.1, EVE: 69.1, NIGHT: 63.1, note: '' },
+    { id: 'N', name: 'N', date: '2026-07-03', DAY: null, EVE: 80, NIGHT: 50, note: '' }
+  ];
+  const wb = X.buildNoiseWorkbook(ExcelJS, rows, { std: { DAY: 71, EVE: 69, NIGHT: 63 }, periods: '日間 a；晚間 b' });
+  const ws = wb.getWorksheet(1), b = (r, c) => !!(ws.getRow(r).getCell(c).font || {}).bold, u = (r, c) => !!(ws.getRow(r).getCell(c).font || {}).underline;
+  assert.deepEqual([4, 5, 6].map(c => b(2, c)), [false, false, false]);   // 等於標準不標
+  assert.deepEqual([4, 5, 6].map(c => b(3, c) && u(3, c)), [true, true, true]);
+  assert.deepEqual([4, 5, 6].map(c => b(4, c)), [false, true, false]);   // 「－」不標
+  assert.equal(wb.overCount, 4);
+  assert.match(wb.getWorksheet('時段說明').getRow(5).getCell(1).value, /日間 71、晚間 69、夜間 63 dB\(A\)/);
+  const wb2 = X.buildNoiseWorkbook(ExcelJS, rows, { std: { DAY: 75, EVE: 85, NIGHT: 70 } });
+  assert.equal(wb2.overCount, 0);
+});

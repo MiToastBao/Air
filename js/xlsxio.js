@@ -115,6 +115,16 @@
     ws.addRow(['感測器編號', '感測器名稱', '日期', 'Leq日', 'Leq晚', 'Leq夜', '備註']);
     rows.forEach(function (r) { ws.addRow([r.id, r.name, dateCell(r.date), cellOr(r, 'LEQ', r.DAY), cellOr(r, 'LEQ', r.EVE), cellOr(r, 'LEQ', r.NIGHT), r.note]); });
     centerNA(ws, 4, 6);
+    // 超過噪音管制標準（嚴格大於）：粗體＋底線，直接設定在儲存格上
+    var std = opts.std || {}, over = 0;
+    rows.forEach(function (r, i) {
+      var row = ws.getRow(i + 2);
+      [['DAY', 4], ['EVE', 5], ['NIGHT', 6]].forEach(function (x) {
+        var lim = std[x[0]];
+        if (typeof lim === 'number' && isFinite(lim) && typeof r[x[0]] === 'number' && r[x[0]] > lim) { row.getCell(x[1]).font = { bold: true, underline: true }; over++; }
+      });
+    });
+    wb.overCount = over;
     ws.getColumn(3).numFmt = 'yyyy/mm/dd';
     for (var c = 4; c <= 6; c++) ws.getColumn(c).numFmt = '0.0';
     styleSheet(ws, [12, 16, 12, 9, 9, 9, 44]);
@@ -122,6 +132,7 @@
       var info = wb.addWorksheet('時段說明');
       info.addRow(['本報表的日／晚／夜時段（以 8/1 為例，結束時間不含）']);
       opts.periods.split('；').forEach(function (t) { info.addRow([t]); });
+      if (opts.std) { info.addRow([]); info.addRow(['噪音管制標準：日間 ' + opts.std.DAY + '、晚間 ' + opts.std.EVE + '、夜間 ' + opts.std.NIGHT + ' dB(A)（超過者以粗體＋底線標示）']); }
       info.getColumn(1).width = 70; info.getRow(1).font = { bold: true };
     }
     return wb;

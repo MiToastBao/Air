@@ -486,7 +486,7 @@
     });
   });
   ['qYear', 'qNum', 'mFrom', 'mTo', 'dFrom', 'dTo'].forEach(function (id) { $(id).addEventListener('change', updateRangeInfo); $(id).addEventListener('input', updateRangeInfo); });
-  ['optRain', 'optFill', 'optPmZero', 'optPmRatio', 'stdPM10', 'stdPM25'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
+  ['optRain', 'optFill', 'optPmZero', 'optPmRatio', 'stdPM10', 'stdPM25', 'stdDAY', 'stdEVE', 'stdNIGHT'].forEach(function (id) { $(id).addEventListener('change', saveSettings); });
 
   function currentRange() {
     var md = mode();
@@ -561,8 +561,8 @@
       var rows = (kind === 'air' ? rep.air : rep.noise).map(function (x) { x.id = reportId(x.id); return x; });
       rows.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
       if (!rows.length) throw new Error(kind === 'air' ? '這個期間沒有空品資料。' : '這個期間沒有噪音資料。');
-      var std = stdValues();
-      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked, std: std }) : X.buildNoiseWorkbook(ExcelJS, rows, { periods: Core.describeNoise(settings().noise) });
+      var std = stdValues(), nstd = noiseStdValues();
+      var wb = kind === 'air' ? X.buildAirWorkbook(ExcelJS, rows, { includeRain: $('optRain').checked, std: std }) : X.buildNoiseWorkbook(ExcelJS, rows, { periods: Core.describeNoise(settings().noise), std: nstd });
       return wb.xlsx.writeBuffer().then(function (buf) {
         var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : '';
         var name = pc + (kind === 'air' ? '空氣品質日均報表_' : '噪音Leq日晚夜報表_') + r.label + '_' + stamp() + '.xlsx';
@@ -572,7 +572,7 @@
         var noData = rows.filter(function (x) { return x.note.indexOf('當日無資料') === 0; }).length;
         $('reportMsg').innerHTML = '<div class="msg ok">已下載「' + esc(name) + '」：' + Object.keys(sensorsN).length + ' 台感測器、' + rows.length + ' 列' +
           (noData ? '（其中 ' + noData + ' 列當日無資料）' : '') + '。' +
-          (kind === 'air' ? '超過標準（PM10 &gt; ' + std.PM10 + '、PM2.5 &gt; ' + std.PM25 + '）的日平均共 ' + (wb.overCount || 0) + ' 格，已設為粗體＋底線。' : '') + '</div>';
+          (kind === 'air' ? '超過標準（PM10 &gt; ' + std.PM10 + '、PM2.5 &gt; ' + std.PM25 + '）的日平均共 ' + (wb.overCount || 0) + ' 格，已設為粗體＋底線。' : '超過標準（日間 &gt; ' + nstd.DAY + '、晚間 &gt; ' + nstd.EVE + '、夜間 &gt; ' + nstd.NIGHT + ' dB(A)）的 Leq 共 ' + (wb.overCount || 0) + ' 格，已設為粗體＋底線。') + '</div>';
       });
     }).catch(function (e) {
       $('reportMsg').innerHTML = '<div class="msg err">' + esc(e.message || e) + '</div>';
@@ -595,6 +595,7 @@
     if (typeof s.pmZero === 'boolean') $('optPmZero').checked = s.pmZero;
     if (typeof s.pmRatio === 'boolean') $('optPmRatio').checked = s.pmRatio;
     var sd = stdValues(); $('stdPM10').value = sd.PM10; $('stdPM25').value = sd.PM25;
+    var nd = noiseStdValues(); $('stdDAY').value = nd.DAY; $('stdEVE').value = nd.EVE; $('stdNIGHT').value = nd.NIGHT;
   }
   function saveSettings() {
     if (state.loadError) return;
@@ -602,6 +603,7 @@
     v.rain = $('optRain').checked; v.fill = $('optFill').checked; v.pmZero = $('optPmZero').checked; v.pmRatio = $('optPmRatio').checked;
     var a = Number($('stdPM10').value), b = Number($('stdPM25').value);
     v.std = { PM10: $('stdPM10').value !== '' && isFinite(a) ? a : 75, PM25: $('stdPM25').value !== '' && isFinite(b) ? b : 30 };
+    v.nstd = {}; ['DAY', 'EVE', 'NIGHT'].forEach(function (k) { var x = Number($('std' + k).value); v.nstd[k] = $('std' + k).value !== '' && isFinite(x) ? x : NOISE_STD[k]; });
     state.meta.settings = v; procCache = null;
     refreshSuspectBadge();
     Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'settings', value: v } }]).catch(function () {});
@@ -766,6 +768,12 @@
   function stdValues() {
     var sd = settings().std || {};
     return { PM10: typeof sd.PM10 === 'number' ? sd.PM10 : 75, PM25: typeof sd.PM25 === 'number' ? sd.PM25 : 30 };
+  }
+  var NOISE_STD = { DAY: 71, EVE: 69, NIGHT: 63 }; // 出廠預設（dB(A)）
+  function noiseStdValues() {
+    var sd = settings().nstd || {}, o = {};
+    Object.keys(NOISE_STD).forEach(function (k) { o[k] = typeof sd[k] === 'number' ? sd[k] : NOISE_STD[k]; });
+    return o;
   }
   function safeName(t) { return String(t).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40); }
   function repOpts() { return { zeroInvalid: $('optPmZero').checked ? Core.ZERO_INVALID : [], pmRatioInvalid: $('optPmRatio').checked, auto: settings().auto, noise: settings().noise }; }

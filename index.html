@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css?v=1.8.5">
+<link rel="stylesheet" href="css/app.css?v=1.9.0">
 </head>
 <body>
 <header class="top">
@@ -220,6 +220,7 @@
       <label class="opt"><input type="checkbox" id="optPmZero" checked> PM10、PM2.5 測值為 0 視為儀器異常、不列入計算（與原 Access 相同）</label>
       <label class="opt"><input type="checkbox" id="optPmRatio" checked> 同一小時 PM2.5 大於 PM10 時，PM10 與 PM2.5 都視為異常、不列入計算</label>
       <div class="row">空氣品質標準（日平均超過就在 Excel 以<b><u>粗體＋底線</u></b>標示）：PM10 &gt; <input type="number" id="stdPM10" class="num" step="any" value="75"> μg/m³、PM2.5 &gt; <input type="number" id="stdPM25" class="num" step="any" value="30"> μg/m³ <span class="hint">（法規改變時改這裡即可）</span></div>
+      <div class="row">噪音管制標準（Leq 超過就在 Excel 以<b><u>粗體＋底線</u></b>標示）：日間 &gt; <input type="number" id="stdDAY" class="num" step="any" value="71">、晚間 &gt; <input type="number" id="stdEVE" class="num" step="any" value="69">、夜間 &gt; <input type="number" id="stdNIGHT" class="num" step="any" value="63"> dB(A) <span class="hint">（每個計畫各自保存；管制區不同時改這裡）</span></div>
 
       <div id="rangeInfo" class="info"></div>
       <div class="row">
@@ -315,14 +316,14 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.8.5"></script>
-<script src="js/version.js?v=1.8.5"></script>
-<script src="js/core.js?v=1.8.5"></script>
-<script src="js/parser.js?v=1.8.5"></script>
-<script src="js/xlsxio.js?v=1.8.5"></script>
-<script src="js/model.js?v=1.8.5"></script>
-<script src="js/store.js?v=1.8.5"></script>
-<script src="js/app.js?v=1.8.5"></script>
+<script src="vendor/exceljs.min.js?v=1.9.0"></script>
+<script src="js/version.js?v=1.9.0"></script>
+<script src="js/core.js?v=1.9.0"></script>
+<script src="js/parser.js?v=1.9.0"></script>
+<script src="js/xlsxio.js?v=1.9.0"></script>
+<script src="js/model.js?v=1.9.0"></script>
+<script src="js/store.js?v=1.9.0"></script>
+<script src="js/app.js?v=1.9.0"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>
