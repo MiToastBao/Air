@@ -462,52 +462,164 @@
     if (ids[keepS]) $('rvSensor').value = keepS;
     if (ms[keepM]) $('rvMonth').value = keepM;
   }
-  ['rvStatus', 'rvSensor', 'rvMonth'].forEach(function (id) { $(id).addEventListener('change', function () { $('reviewResult').innerHTML = ''; renderReview(); }); });
+  ['rvStatus', 'rvSensor', 'rvMonth'].forEach(function (id) { $(id).addEventListener('change', function () { $('reviewResult').innerHTML = ''; $('rvBulkMsg').innerHTML = ''; renderReview(); }); });
 
   var shown = [];
-  function renderReview() {
-    var all = M.reviewItems(state.chunks, review());
-    var todo = all.items.filter(function (it) { return it.status !== 'confirmed'; }).length;
-    $('reviewSummary').innerHTML = '<div class="msg ' + (todo ? 'err' : 'ok') + '">待確認 <b>' + todo + '</b> 筆（紅框）、已確認 ' + (all.items.length - todo) + ' 筆。' +
-      '另有 ' + all.autoInvalid + ' 個備註時段的數值本來就全部是異常值（負值或空白），已自動不列入計算，不需確認。</div>';
+  var selected = {};      // key → true：左邊「選取」勾起來的列
+  var noteOff = {};       // 月報備註篩選：被取消勾選（不顯示）的備註文字
+  var bulkFields = {};    // 批次區勾選的測項
+
+  function baseFiltered(all) {
     var st = $('rvStatus').value, fs = $('rvSensor').value, fm = $('rvMonth').value;
-    shown = all.items.filter(function (it) {
+    return all.items.filter(function (it) {
       if (st === 'todo' && it.status === 'confirmed') return false;
       if (st === 'confirmed' && it.status !== 'confirmed') return false;
       if (fs && it.id !== fs) return false;
       if (fm && it.ts.slice(0, 7) !== fm) return false;
       return true;
     });
-    var LIMIT = 300;
-    var list = shown.slice(0, LIMIT);
+  }
+  function isPmZero(it, f) { return it.v[f] === 0 && (f === 'PM10' || f === 'PM25') && $('optPmZero').checked; }
+  function editable(it, f) { return it.validFields.indexOf(f) >= 0 && !isPmZero(it, f); }
+
+  function renderNoteFilter(base) {
+    var cnt = {}, order = [];
+    base.forEach(function (it) { if (!(it.note in cnt)) { cnt[it.note] = 0; order.push(it.note); } cnt[it.note]++; });
+    order.sort(function (a, b) { return cnt[b] - cnt[a] || (a < b ? -1 : 1); });
+    var on = order.filter(function (n) { return !noteOff[n]; }).length;
+    $('rvNoteSum').textContent = '月報備註篩選（' + (on === order.length ? '全部' : on + ' / ' + order.length + ' 項') + '）';
+    $('rvNoteList').innerHTML = order.map(function (n) {
+      return '<label class="nf"><input type="checkbox" data-note="' + esc(n) + '"' + (noteOff[n] ? '' : ' checked') + '> ' + esc(n) + ' <span class="hint">(' + cnt[n] + ')</span></label>';
+    }).join('');
+    $('rvNoteAll').checked = on === order.length;
+    $('rvNoteAll').indeterminate = on > 0 && on < order.length;
+  }
+
+  function renderReview() {
+    var all = M.reviewItems(state.chunks, review());
+    var todo = all.items.filter(function (it) { return it.status !== 'confirmed'; }).length;
+    $('reviewSummary').innerHTML = '<div class="msg ' + (todo ? 'err' : 'ok') + '">待確認 <b>' + todo + '</b> 筆（紅框）、已確認 ' + (all.items.length - todo) + ' 筆。' +
+      '另有 ' + all.autoInvalid + ' 個備註時段的數值本來就全部是異常值（負值或空白），已自動不列入計算，不需確認。</div>';
+    var base = baseFiltered(all);
+    renderNoteFilter(base);
+    var st = $('rvStatus').value;
+    var filtered = base.filter(function (it) { return !noteOff[it.note]; });
+    var LIMIT = 1000;
+    var list = filtered.slice(0, LIMIT);
     shown = list;
+    var keys = {}; list.forEach(function (it) { keys[it.key] = true; });
+    Object.keys(selected).forEach(function (k) { if (!keys[k]) delete selected[k]; }); // 篩選掉的列不再算選取
     if (!list.length) {
-      $('reviewTable').innerHTML = '<p class="hint">' + (st === 'todo' ? '沒有待確認的時段。' : '沒有符合條件的時段。') + '</p>';
-      $('reviewActions').hidden = true; return;
+      $('reviewTable').innerHTML = base.length
+        ? '<p class="msg warn">「月報備註篩選」把 ' + base.length + ' 筆都隱藏了。請打開上方的篩選，勾選「全選」即可顯示。</p>'
+        : '<p class="hint">' + (st === 'todo' ? '沒有待確認的時段。' : '沒有符合條件的時段。') + '</p>';
+      $('reviewActions').hidden = true; $('rvBulk').hidden = true; return;
     }
     var cols = M.REVIEW_FIELDS.filter(function (f) { return list.some(function (it) { return it.fields.indexOf(f) >= 0; }); });
-    var h = '<table class="rv"><tr><th>狀態</th><th>感測器</th><th>時間</th><th class="l">月報備註</th>' + cols.map(function (f) { return '<th>' + LABEL[f] + '</th>'; }).join('') + '<th>整列</th></tr>';
+    Object.keys(bulkFields).forEach(function (f) { if (cols.indexOf(f) < 0) delete bulkFields[f]; });
+    $('rvBulkFields').innerHTML = cols.map(function (f) {
+      return '<label class="bf"><input type="checkbox" data-bf="' + f + '"' + (bulkFields[f] ? ' checked' : '') + '> ' + LABEL[f] + '</label>';
+    }).join('');
+    var h = '<table class="rv"><tr><th><label title="全選／取消全選目前列出的列"><input type="checkbox" id="rvSelAll"> 選取</label></th><th>狀態</th><th>感測器</th><th>時間</th><th class="l">月報備註</th>' + cols.map(function (f) { return '<th>' + LABEL[f] + '</th>'; }).join('') + '<th>整列</th></tr>';
     list.forEach(function (it, i) {
       var ex = draft[it.key] || it.exclude;
-      var cls = it.status === 'confirmed' ? '' : it.status === 'changed' ? 'changed' : 'pending';
+      var cls = (it.status === 'confirmed' ? '' : it.status === 'changed' ? 'changed' : 'pending') + (selected[it.key] ? ' sel' : '');
       var stTxt = it.status === 'confirmed' ? '<span class="st-c">已確認</span>' : it.status === 'changed' ? '<span class="st-p">月報已更新<br>請重新確認</span>' : '<span class="st-p">待確認</span>';
-      h += '<tr class="' + cls + '" data-i="' + i + '"><td>' + stTxt + '</td><td>' + esc(it.id) + '<br><span class="hint">' + esc(sensorName(it.id)) + '</span></td><td>' + esc(Core.toRoc(it.ts.slice(0, 10)) + ' ' + it.ts.slice(11)) + '</td><td class="note">' + esc(it.note) + '</td>';
+      h += '<tr class="' + cls + '" data-i="' + i + '"><td><input type="checkbox" class="rowSel"' + (selected[it.key] ? ' checked' : '') + '></td><td>' + stTxt + '</td><td>' + esc(it.id) + '<br><span class="hint">' + esc(sensorName(it.id)) + '</span></td><td>' + esc(Core.toRoc(it.ts.slice(0, 10)) + ' ' + it.ts.slice(11)) + '</td><td class="note">' + esc(it.note) + '</td>';
       cols.forEach(function (f) {
         if (it.fields.indexOf(f) < 0) { h += '<td></td>'; return; }
         var v = it.v[f];
         if (v === null || v === undefined) { h += '<td class="val"><span class="hint">異常值<br>（已不計）</span></td>'; return; }
-        if (v === 0 && (f === 'PM10' || f === 'PM25') && $('optPmZero').checked) { h += '<td class="val"><span class="v">0</span><span class="hint">PM 為 0<br>已不計</span></td>'; return; }
+        if (isPmZero(it, f)) { h += '<td class="val"><span class="v">0</span><span class="hint">PM 為 0<br>已不計</span></td>'; return; }
         var x = ex.indexOf(f) >= 0;
         h += '<td class="val' + (x ? ' x' : '') + '"><span class="v">' + esc(v) + '</span><label><input type="checkbox" data-f="' + f + '"' + (x ? ' checked' : '') + '> 不採用</label></td>';
       });
       h += '<td><button data-all="1">全部不採用</button><br><button data-all="0">全部採用</button></td></tr>';
     });
     h += '</table>';
-    if (shown.length >= LIMIT) h += '<p class="hint">一次最多顯示 ' + LIMIT + ' 筆，請用上方的感測器或月份篩選。</p>';
+    if (filtered.length > LIMIT) h += '<p class="msg warn">符合條件的有 ' + filtered.length + ' 筆，一次最多列出 ' + LIMIT + ' 筆；請用感測器、月份或備註篩選縮小範圍。</p>';
     $('reviewTable').innerHTML = h;
-    $('reviewActions').hidden = false;
-    $('rvCount').textContent = '會把目前畫面上的 ' + list.length + ' 筆，依勾選結果存成「已確認」。';
+    $('reviewActions').hidden = false; $('rvBulk').hidden = false;
+    $('rvCount').textContent = '會把目前列出的 ' + list.length + ' 筆，依勾選結果存成「已確認」。';
+    updateSelCount();
   }
+  function updateSelCount() {
+    var n = shown.filter(function (it) { return selected[it.key]; }).length;
+    $('rvSelN').textContent = n;
+    var all = $('rvSelAll');
+    if (all) { all.checked = n > 0 && n === shown.length; all.indeterminate = n > 0 && n < shown.length; }
+  }
+  // 月報備註篩選（像 Excel 篩選器）
+  $('rvNoteList').addEventListener('change', function (e) {
+    var n = e.target.dataset.note; if (n === undefined) return;
+    if (e.target.checked) delete noteOff[n]; else noteOff[n] = true;
+    renderReview();
+  });
+  $('rvNoteAll').addEventListener('change', function (e) {
+    var on = e.target.checked;
+    $('rvNoteList').querySelectorAll('input[data-note]').forEach(function (cb) { if (on) delete noteOff[cb.dataset.note]; else noteOff[cb.dataset.note] = true; });
+    renderReview();
+  });
+  $('rvNoteOnly').addEventListener('click', function () { // 只看「勾選列」的備註
+    var keep = {};
+    shown.forEach(function (it) { if (selected[it.key]) keep[it.note] = true; });
+    if (!Object.keys(keep).length) { $('rvBulkMsg').innerHTML = '<span class="msg warn">請先在左邊勾選幾列。</span>'; return; }
+    $('rvNoteList').querySelectorAll('input[data-note]').forEach(function (cb) { if (keep[cb.dataset.note]) delete noteOff[cb.dataset.note]; else noteOff[cb.dataset.note] = true; });
+    renderReview();
+  });
+  function kwFilter() {
+    var kw = $('rvKw').value.trim().toLowerCase();
+    if (!kw) { $('rvBulkMsg').innerHTML = '<span class="msg warn">請輸入關鍵字，例如 PM。</span>'; return; }
+    var boxes = Array.from($('rvNoteList').querySelectorAll('input[data-note]'));
+    var hit = boxes.filter(function (cb) { return cb.dataset.note.toLowerCase().indexOf(kw) >= 0; });
+    if (!hit.length) { $('rvBulkMsg').innerHTML = '<span class="msg warn">目前列出的備註沒有含「' + esc(kw) + '」的，篩選維持不變。</span>'; return; }
+    boxes.forEach(function (cb) { if (hit.indexOf(cb) >= 0) delete noteOff[cb.dataset.note]; else noteOff[cb.dataset.note] = true; });
+    renderReview();
+    $('rvBulkMsg').innerHTML = '<span class="msg info">已篩選出備註含「' + esc(kw) + '」的 ' + hit.length + ' 種備註。</span>';
+  }
+  $('rvKwBtn').addEventListener('click', kwFilter);
+  $('rvKw').addEventListener('keydown', function (e) { if (e.key === 'Enter') kwFilter(); });
+  // 選取列
+  $('reviewTable').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.id === 'rvSelAll') {
+      shown.forEach(function (it) { if (t.checked) selected[it.key] = true; else delete selected[it.key]; });
+      $('reviewTable').querySelectorAll('tr[data-i]').forEach(function (tr) { tr.querySelector('.rowSel').checked = t.checked; tr.classList.toggle('sel', t.checked); });
+      updateSelCount(); return;
+    }
+    if (t.classList.contains('rowSel')) {
+      var tr0 = t.closest('tr'), it0 = shown[Number(tr0.dataset.i)];
+      if (t.checked) selected[it0.key] = true; else delete selected[it0.key];
+      tr0.classList.toggle('sel', t.checked);
+      updateSelCount();
+    }
+  });
+  $('rvBulkFields').addEventListener('change', function (e) {
+    var f = e.target.dataset.bf; if (!f) return;
+    if (e.target.checked) bulkFields[f] = true; else delete bulkFields[f];
+  });
+  function bulkApply(exclude) {
+    var fs = Object.keys(bulkFields);
+    var rows = shown.filter(function (it) { return selected[it.key]; });
+    if (!rows.length) { $('rvBulkMsg').innerHTML = '<span class="msg warn">請先在左邊「選取」欄勾選要處理的列（表頭可全選）。</span>'; return; }
+    if (!fs.length) { $('rvBulkMsg').innerHTML = '<span class="msg warn">請先勾選要處理的測項。</span>'; return; }
+    var cells = 0;
+    rows.forEach(function (it) {
+      var ex = (draft[it.key] || it.exclude).slice();
+      fs.forEach(function (f) {
+        if (!editable(it, f)) return;
+        var i = ex.indexOf(f);
+        if (exclude && i < 0) { ex.push(f); cells++; }
+        if (!exclude && i >= 0) { ex.splice(i, 1); cells++; }
+      });
+      draft[it.key] = ex;
+    });
+    renderReview();
+    $('rvBulkMsg').innerHTML = '<span class="msg info">已把 ' + rows.length + ' 列的 ' + fs.map(function (f) { return LABEL[f]; }).join('、') + ' 設為「' + (exclude ? '不採用' : '採用') + '」（變動 ' + cells + ' 格）。確認無誤後請按下方「確認並重新計算」。</span>';
+  }
+  $('rvBulkX').addEventListener('click', function () { bulkApply(true); });
+  $('rvBulkK').addEventListener('click', function () { bulkApply(false); });
+
   $('reviewTable').addEventListener('change', function (e) {
     var cb = e.target; if (!cb.dataset || !cb.dataset.f) return;
     var tr = cb.closest('tr'), it = shown[Number(tr.dataset.i)];
@@ -540,7 +652,9 @@
     var btn = $('rvConfirm'); btn.disabled = true;
     Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'review', value: after } }]).then(function () {
       var diff = recalcDiff(Object.keys(days), before, after);
-      shown.forEach(function (it) { delete draft[it.key]; });
+      shown.forEach(function (it) { delete draft[it.key]; delete selected[it.key]; });
+      $('rvBulkMsg').innerHTML = '';
+      noteOff = {}; // 確認完一批後，備註篩選恢復全選，剩下的待確認時段才看得到
       return reload().then(function () { renderReview(); showRecalc(diff, Object.keys(days).length); });
     }).catch(function (e) {
       $('reviewResult').innerHTML = '<div class="msg err">儲存失敗，確認結果沒有寫入：' + esc(e.message || e) + '</div>';

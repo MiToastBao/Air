@@ -76,3 +76,12 @@ table.rv td.note{white-space:normal;min-width:160px;max-width:260px;text-align:l
 table.rv button{padding:2px 8px;font-size:13px;margin:1px}
 .st-p{color:var(--danger);font-weight:bold}
 .st-c{color:var(--ok)}
+
+.notefilter{border:1px solid var(--line);border-radius:8px;padding:6px 12px;margin:8px 0;background:#fafcfe}
+.notefilter summary{cursor:pointer;font-weight:bold;color:var(--text)}
+.nflist{max-height:220px;overflow:auto;columns:2 260px;column-gap:24px}
+.nf{display:block;break-inside:avoid;padding:1px 0}
+.bulk{border:1px solid #9fb3c8;background:var(--info-bg);color:#16324f;border-radius:8px;padding:8px 12px;margin:8px 0;position:sticky;top:0;z-index:2}
+.bf{margin-right:12px;white-space:nowrap}
+table.rv tr.sel td{background:#e7f0fb}
+table.rv tr.pending.sel td{background:#f3e6ef}

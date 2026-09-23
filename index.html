@@ -52,6 +52,18 @@
         感測器 <select id="rvSensor"></select>
         月份 <select id="rvMonth"></select>
       </div>
+      <details class="notefilter" id="rvNoteBox">
+        <summary id="rvNoteSum">月報備註篩選</summary>
+        <div class="row"><label><input type="checkbox" id="rvNoteAll" checked> 全選</label><button id="rvNoteOnly" type="button">只看選取列的備註</button>
+          備註含 <input type="text" id="rvKw" placeholder="例：PM" style="width:110px"> <button id="rvKwBtn" type="button">只看含此關鍵字</button></div>
+        <div id="rvNoteList" class="nflist"></div>
+      </details>
+      <div class="bulk" id="rvBulk" hidden>
+        <div><b>批次設定</b>：已選取 <b id="rvSelN">0</b> 列（在表格左邊「選取」欄勾選，表頭可全選）</div>
+        <div class="row">測項：<span id="rvBulkFields"></span></div>
+        <div class="row"><button id="rvBulkX" class="danger" type="button">選取列的這些測項 → 不採用</button><button id="rvBulkK" type="button">選取列的這些測項 → 改回採用</button></div>
+        <div id="rvBulkMsg"></div>
+      </div>
       <div id="reviewTable" class="scroll"></div>
       <div class="row" id="reviewActions" hidden>
         <button id="rvConfirm" class="primary">確認並重新計算</button>
