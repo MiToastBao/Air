@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>環境監測季報產生器</title>
-<link rel="stylesheet" href="css/app.css?v=1.4.0">
+<link rel="stylesheet" href="css/app.css?v=1.4.2">
 </head>
 <body>
 <header class="top">
@@ -106,8 +106,15 @@
       </div>
       <div id="sgSummary"></div>
       <div class="row" id="sgBatch" hidden>批次處理目前列出的 <b id="sgBatchN"></b> 段：
-        <button id="sgAllX" type="button" class="danger">全部確認不採用</button><button id="sgAllK" type="button">全部改回採用</button></div>
+        <button id="sgAllX" type="button" class="danger">全部確認不採用</button><button id="sgAllK" type="button">全部改回採用</button><button id="sgAllR" type="button">全部改回待確認</button></div>
       <div id="sgMsg"></div>
+      <div class="bulk" id="sgSelBar" hidden>
+        <label><input type="checkbox" id="sgSelAll"> 全選目前列出的段</label>　已勾選 <b id="sgSelN">0</b> 段 →
+        <button id="sgSelX" type="button" class="danger" disabled>確認不採用</button>
+        <button id="sgSelK" type="button" disabled>改回採用（真實數值）</button>
+        <button id="sgSelR" type="button" disabled>改回待確認</button>
+        <span class="hint">先在每一段左上角「勾選」，最後再一次決定。</span>
+      </div>
       <div id="sgList"></div>
     </div>
     <div class="card">
@@ -256,13 +263,14 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.4.0"></script>
-<script src="js/version.js?v=1.4.0"></script>
-<script src="js/core.js?v=1.4.0"></script>
-<script src="js/parser.js?v=1.4.0"></script>
-<script src="js/xlsxio.js?v=1.4.0"></script>
-<script src="js/model.js?v=1.4.0"></script>
-<script src="js/store.js?v=1.4.0"></script>
-<script src="js/app.js?v=1.4.0"></script>
+<script src="vendor/exceljs.min.js?v=1.4.2"></script>
+<script src="js/version.js?v=1.4.2"></script>
+<script src="js/core.js?v=1.4.2"></script>
+<script src="js/parser.js?v=1.4.2"></script>
+<script src="js/xlsxio.js?v=1.4.2"></script>
+<script src="js/model.js?v=1.4.2"></script>
+<script src="js/store.js?v=1.4.2"></script>
+<script src="js/app.js?v=1.4.2"></script>
+<div id="toast" class="toast" hidden></div>
 </body>
 </html>
