@@ -1898,6 +1898,7 @@
     $('moeLabel').placeholder = '環境部' + siteInfo(cur).sitename + '測站';
   }
   function renderMoeList() {
+    if ($('trRefs')) renderTrendRefs(); // 測站資料有變動時，比對測站清單一起更新
     var cs = moeChunks(curSite()).sort(function (a, b) { return a.month < b.month ? -1 : 1; });
     if (!cs.length) { $('moeList').innerHTML = '<p class="hint">這個測站還沒有資料，請自動抓取或匯入 CSV。</p>'; $('moeDelRow').hidden = true; return; }
     var items = []; cs.forEach(function (c) { Object.keys(c.items).forEach(function (k) { if (items.indexOf(k) < 0) items.push(k); }); });
@@ -1924,7 +1925,7 @@
   $('moeLabel').addEventListener('change', function () {
     var s = {}; Object.keys(moeSites()).forEach(function (k) { s[k] = moeSites()[k]; });
     s[curSite()] = { label: $('moeLabel').value.trim() };
-    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'moeSites', value: s } }]).then(reload).then(function () { trDirty(); });
+    Store.writeBatch([{ store: 'meta', type: 'put', value: { key: 'moeSites', value: s } }]).then(reload).then(function () { renderTrendRefs(); trDirty(); });
   });
   function apiFetchJson(url) {
     return fetch(url, { cache: 'no-store' }).then(function (r) {
@@ -2052,10 +2053,10 @@
   function trSensorFields() { var f = {}; state.chunks.forEach(function (c) { c.fields.forEach(function (x) { f[x] = true; }); }); return f; }
   function stationItems(sid) { var it = {}; moeChunks(sid).forEach(function (c) { Object.keys(c.items).forEach(function (k) { it[k] = c.items[k]; }); }); return it; }
   function renderTrendItems() {
-    var sf = trSensorFields(), si = stationItems(curSite()), sel = trSet().items || TR.TREND_ITEMS.filter(function (x) { return x.def; }).map(function (x) { return x.key; });
+    var sf = trSensorFields(), si = refItems(), sel = trSet().items || TR.TREND_ITEMS.filter(function (x) { return x.def; }).map(function (x) { return x.key; });
     var list = TR.TREND_ITEMS.filter(function (x) { return sf[x.key] || (x.moe && si[x.moe]); });
     $('trItems').innerHTML = list.length ? list.map(function (x) {
-      var note = !sf[x.key] ? '（感測器沒有這個測項）' : !(x.moe && si[x.moe]) ? '（這個測站沒有這個測項）' : '';
+      var note = !sf[x.key] ? '（感測器沒有這個測項）' : !(x.moe && si[x.moe]) ? '（勾選的測站都沒有這個測項）' : '';
       return '<label class="bf"><input type="checkbox" data-tri="' + x.key + '"' + (sel.indexOf(x.key) >= 0 ? ' checked' : '') + '> ' + esc(x.label) + (note ? ' <span class="hint">' + note + '</span>' : '') + '</label>';
     }).join('') : '<span class="hint">尚未匯入資料。</span>';
     var y = trSet().y || {};
@@ -2064,6 +2065,27 @@
       return '<tr><td class="l">' + esc(x.label) + '</td><td><input type="number" step="any" class="num" data-try="' + x.key + '|min" value="' + (typeof v.min === 'number' ? v.min : '') + '"></td><td><input type="number" step="any" class="num" data-try="' + x.key + '|max" value="' + (typeof v.max === 'number' ? v.max : '') + '"></td></tr>';
     }).join('') + '</table><p class="hint">Y 軸最大值空白時自動決定：為了看趨勢，不會為少數異常高值拉高，超過的線條在圖頂端截斷。</p>';
     renderTrendSensors();
+  }
+  // ---- 比對的環境部測站（可多選，最多 5 站；顏色依勾選順序，彼此不重複）----
+  var MAX_REFS = 5;
+  function sitesWithData() { var s = {}; moeChunks().forEach(function (c) { s[c.siteid] = true; }); return s; }
+  function refSites() {
+    var have = sitesWithData(), saved = trSet().refSites;
+    var list = (Array.isArray(saved) ? saved : [curSite()]).map(String).filter(function (id) { return have[id]; });
+    if (!list.length && !Array.isArray(saved) && have[curSite()]) list = [curSite()];
+    return list.slice(0, MAX_REFS);
+  }
+  function refColor(i) { return TR.REF_COLORS[i % TR.REF_COLORS.length]; }
+  function refItems() { var it = {}; refSites().forEach(function (sid) { var x = stationItems(sid); Object.keys(x).forEach(function (k) { it[k] = x[k]; }); }); return it; }
+  function renderTrendRefs() {
+    var have = sitesWithData(), sel = refSites(), ids = Object.keys(have);
+    ids.sort(function (a, b) { var ia = sel.indexOf(a), ib = sel.indexOf(b); if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); return collator.compare(siteInfo(a).county + siteInfo(a).sitename, siteInfo(b).county + siteInfo(b).sitename); });
+    $('trRefs').innerHTML = ids.length ? ids.map(function (id) {
+      var k = sel.indexOf(id), n = moeChunks(id).length;
+      return '<label class="bf"><input type="checkbox" data-trref="' + esc(id) + '"' + (k >= 0 ? ' checked' : '') + '> ' +
+        (k >= 0 ? '<span style="display:inline-block;width:22px;height:4px;background:' + refColor(k) + ';vertical-align:middle;margin-right:4px"></span>' : '') +
+        esc(siteLabel(id)) + ' <span class="hint">（' + esc(siteInfo(id).county || '') + '，' + n + ' 個月）</span></label>';
+    }).join('') : '<span class="hint">還沒有任何環境部測站的資料，請先在上方選測站並自動抓取或匯入 CSV。</span>';
   }
   function renderTrendSensors() {
     var ts = trSet(), off = ts.offSensors || [], items = selItems();
@@ -2082,7 +2104,7 @@
   function renderTrendForm() {
     migrateMoenv().then(function () {
       fillRangeForm('tr', trReady);
-      renderSiteSelect(); renderMoeList(); renderApiDefaults(); renderTrendItems();
+      renderSiteSelect(); renderMoeList(); renderApiDefaults(); renderTrendRefs(); renderTrendItems();
       if (!trReady) {
         var ts = trSet();
         if (typeof ts.title === 'boolean') $('trTitle').checked = ts.title;
@@ -2096,6 +2118,14 @@
     var t = e.target;
     if (['moeFile', 'moeLabel', 'moeDelM', 'moeSite', 'apiFrom', 'apiTo'].indexOf(t.id) >= 0) return;
     if (t.dataset.tri) { trSave({ items: selItems() }); renderTrendSensors(); }
+    if (t.dataset.trref) {
+      var cur = refSites().filter(function (id) { return id !== t.dataset.trref; });
+      if (t.checked) {
+        if (cur.length >= MAX_REFS) { t.checked = false; $('trMsg').innerHTML = '<div class="msg warn">最多同時比對 ' + MAX_REFS + ' 個環境部測站（顏色才不會重複、圖才看得清楚）。請先取消其他測站。</div>'; return; }
+        cur.push(t.dataset.trref);
+      }
+      trSave({ refSites: cur }); renderTrendRefs(); renderTrendItems();
+    }
     if (t.dataset.trs) trSave({ offSensors: Array.prototype.map.call(document.querySelectorAll('[data-trs]:not(:checked)'), function (x) { return x.dataset.trs; }) });
     if (t.dataset.try) {
       var y = {}; document.querySelectorAll('[data-try]').forEach(function (x) { var p = x.dataset.try.split('|'), n = Number(x.value); if (x.value !== '' && isFinite(n)) (y[p[0]] = y[p[0]] || {})[p[1]] = n; });
@@ -2116,7 +2146,8 @@
     var days = Core.daysBetween(r.from, r.to), x = [];
     if (hourly) days.forEach(function (d) { for (var h = 0; h < 24; h++) x.push(d + ' ' + Core.pad(h) + ':00'); }); else x = days.slice();
     var idx = {}; x.forEach(function (t, i) { idx[t] = i; });
-    var sid = curSite(), chunks = moeChunks(sid), si = stationItems(sid), pn = plotNames(sensors.map(function (s) { return s.id; }));
+    var refs = refSites().map(function (sid, i) { return { sid: sid, chunks: moeChunks(sid), si: stationItems(sid), label: siteLabel(sid), color: refColor(i) }; });
+    var pn = plotNames(sensors.map(function (s) { return s.id; }));
     var reportKeys = Core.AIR_FIELDS;
     var daily = hourly ? null : Core.buildReports(sensors, r, { fillMissingDays: false, zeroInvalid: zero, pmRatioInvalid: ratio, noise: settings().noise }).air;
     var ys = trSet().y || {};
@@ -2135,19 +2166,25 @@
         if (!any) { noData.push(pn[s.id]); return; }
         series.push({ name: pn[s.id], color: TR.PALETTE[k++ % TR.PALETTE.length], values: vals });
       });
-      var refAny = false, refMissing = 0;
-      if (it.moe && si[it.moe]) {
-        var mh = TR.stationHours(chunks, it.moe, r.from, r.to), ms = hourly ? mh : TR.dailyOf(mh, it.sum);
-        var ref = x.map(function (t) { var v = ms[t]; return v === undefined ? null : v; });
-        refAny = ref.some(function (v) { return v !== null; });
-        refMissing = ref.filter(function (v) { return v === null; }).length;
-        if (refAny) series.push({ name: siteLabel(sid), color: TR.REF_COLOR, ref: true, values: ref });
-      }
-      var unit = it.moe && si[it.moe] && si[it.moe].itemunit ? TR.unitText(si[it.moe].itemunit) : it.unit;
+      // 每個比對測站一條粗線（顏色依勾選順序）；refStat 記錄每站的狀況給畫面提示
+      var refStat = [], unit = it.unit;
+      refs.forEach(function (rf) {
+        var st = { label: rf.label, color: rf.color, has: !!(it.moe && rf.si[it.moe]), any: false, missing: 0 };
+        if (st.has) {
+          if (rf.si[it.moe].itemunit && unit === it.unit) unit = TR.unitText(rf.si[it.moe].itemunit);
+          var mh = TR.stationHours(rf.chunks, it.moe, r.from, r.to), ms = hourly ? mh : TR.dailyOf(mh, it.sum);
+          var ref = x.map(function (t) { var v = ms[t]; return v === undefined ? null : v; });
+          st.any = ref.some(function (v) { return v !== null; });
+          st.missing = ref.filter(function (v) { return v === null; }).length;
+          if (st.any) series.push({ name: rf.label, color: rf.color, ref: true, values: ref });
+        }
+        refStat.push(st);
+      });
+      var refAny = refStat.some(function (x) { return x.any; });
       var y = ys[it.key] || {}, auto = TR.autoYMax(series);
       return { key: it.key, sheet: it.label.replace(/[₀-₉]/g, function (c) { return String('₀₁₂₃₄₅₆₇₈₉'.indexOf(c)); }), title: it.label, yTitle: it.label + '（' + unit + '）', xTitle: hourly ? '日期時間' : '日期', yMin: y.min,
         yMax: typeof y.max === 'number' ? y.max : auto.max, autoCut: typeof y.max === 'number' ? 0 : auto.cut, showTitle: $('trTitle').checked, hourly: hourly, x: x, series: series, noData: noData,
-        refAny: refAny, refMissing: refMissing, refHas: !!(it.moe && si[it.moe]) };
+        refAny: refAny, refStat: refStat };
     }) };
   }
   $('trGo').addEventListener('click', function () {
@@ -2158,21 +2195,26 @@
     paint().then(function () {
       var b = trBuild(r), charts = b.charts.filter(function (c) { return c.series.length; }), skipped = b.charts.filter(function (c) { return !c.series.length; }).map(function (c) { return c.title; });
       if (!charts.length) { $('trOut').innerHTML = ''; $('trMsg').innerHTML = '<div class="msg err">這個期間、勾選的測項沒有任何資料。</div>'; return; }
-      trResult = { range: r, hourly: b.hourly, charts: charts };
-      var unit = b.hourly ? '小時' : '天', lab = siteLabel(curSite());
+      trResult = { range: r, hourly: b.hourly, charts: charts, refs: refSites() };
+      var unit = b.hourly ? '小時' : '天', lab = refSites().map(siteLabel).join('、') || '（未勾選環境部測站）';
       $('trOut').innerHTML = charts.map(function (c, i) {
-        return '<div class="card bxfig"><h3>' + esc(c.title) + ' <span class="hint">（' + c.series.filter(function (s) { return !s.ref; }).length + ' 台感測器' + (c.refAny ? '＋' + esc(lab) : '') + '；Y 軸上限 ' + c.yMax + '）</span></h3><canvas data-trc="' + i + '"></canvas>' +
+        return '<div class="card bxfig"><h3>' + esc(c.title) + ' <span class="hint">（' + c.series.filter(function (s) { return !s.ref; }).length + ' 台感測器' + (c.refAny ? '＋環境部 ' + c.series.filter(function (s) { return s.ref; }).length + ' 站' : '') + '；Y 軸上限 ' + c.yMax + '）</span></h3><canvas data-trc="' + i + '"></canvas>' +
           '<div class="row"><button type="button" data-trpng="' + i + '">下載這張圖（PNG）</button>' + (c.autoCut ? '<span class="hint">有 ' + c.autoCut + ' 個異常高值超過 Y 軸上限，線條在圖頂端截斷（主要看趨勢；要看全部請在上方填 Y 軸最大值）。</span>' : '') +
           (c.noData.length ? '<span class="hint">期間內沒有有效數值、未畫：' + esc(c.noData.join('、')) + '</span>' : '') +
-          (!c.refHas ? '<span class="hint">' + esc(lab) + '沒有這個測項（或還沒抓取），圖上沒有紅線。</span>' : !c.refAny ? '<span class="hint">這個期間沒有' + esc(lab) + '的資料，圖上沒有紅線。</span>' : c.refMissing ? '<span class="hint">有 ' + c.refMissing + ' ' + unit + '沒有' + esc(lab) + '資料，紅線在這些地方會斷開。</span>' : '') + '</div></div>';
+          c.refStat.map(function (st) {
+            return !st.has ? '<span class="hint">' + esc(st.label) + '沒有這個測項（或還沒抓取），圖上沒有這站的線。</span>' : !st.any ? '<span class="hint">這個期間沒有' + esc(st.label) + '的資料，圖上沒有這站的線。</span>' : st.missing ? '<span class="hint">有 ' + st.missing + ' ' + unit + '沒有' + esc(st.label) + '資料，這站的線在這些地方會斷開。</span>' : '';
+          }).join('') + '</div></div>';
       }).join('');
       charts.forEach(function (c, i) { TR.drawTrend(document.querySelector('canvas[data-trc="' + i + '"]'), c, 1.5); });
       $('trXlsx').disabled = false; $('trPngs').disabled = false;
       $('trMsg').innerHTML = '<div class="msg ok">期間 <b>' + esc(r.title) + '</b>（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '），' + (b.hourly ? '逐時' : '日平均') + '，比對測站：' + esc(lab) + '：已產生 ' + charts.length + ' 張趨勢圖。' +
-        (skipped.length ? '沒有資料、未畫：' + esc(skipped.join('、')) + '。' : '') + '</div>' + (charts.every(function (c) { return !c.refAny; }) ? '<div class="msg warn">這個期間沒有' + esc(lab) + '的資料，圖上沒有紅線。請先在上方自動抓取或匯入 CSV。</div>' : '');
+        (skipped.length ? '沒有資料、未畫：' + esc(skipped.join('、')) + '。' : '') + '</div>' + (!refSites().length ? '<div class="msg warn">沒有勾選比對的環境部測站，圖上只有感測器。</div>' : charts.every(function (c) { return !c.refAny; }) ? '<div class="msg warn">這個期間沒有' + esc(lab) + '的資料，圖上沒有環境部的線。請先在上方自動抓取或匯入 CSV。</div>' : '');
     });
   });
-  function trFileBase() { var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : ''; return pc + '環境部比對趨勢圖_' + safeName(siteInfo(curSite()).sitename) + '站_' + trResult.range.label + (trResult.hourly ? '_逐時' : '_日平均'); }
+  function trFileBase() {
+    var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : '', rs = trResult.refs || [];
+    var st = rs.length ? (rs.length <= 3 ? rs.map(function (id) { return safeName(siteInfo(id).sitename); }).join('_') + '站' : safeName(siteInfo(rs[0]).sitename) + '等' + rs.length + '站') : '無測站';
+    return pc + '環境部比對趨勢圖_' + st + '_' + trResult.range.label + (trResult.hourly ? '_逐時' : '_日平均'); }
   function trPngBlob(c) { return new Promise(function (res) { var cv = document.createElement('canvas'); TR.drawTrend(cv, c, 3); cv.toBlob(function (b) { res(b); }, 'image/png'); }); }
   $('trOut').addEventListener('click', function (e) {
     var i = e.target.dataset.trpng; if (i === undefined || !trResult) return;
@@ -2191,12 +2233,12 @@
   $('trXlsx').addEventListener('click', function () {
     if (!trResult) return;
     var btn = $('trXlsx'), old = btn.textContent; btn.disabled = true; btn.textContent = '產生中…';
-    var r = trResult.range, cur = Store.current() || {}, lab = siteLabel(curSite());
+    var r = trResult.range, cur = Store.current() || {}, lab = (trResult.refs || []).map(function (id, i) { return siteLabel(id) + '（' + ['紅', '橘', '黑', '桃紅', '紫'][i] + '色）'; }).join('、') || '（未勾選）';
     var info = ['環境部測站比對趨勢圖（' + (cur.code ? cur.code + ' ' : '') + (cur.name || '') + '）',
       '期間：' + r.title + '（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '），' + (trResult.hourly ? '逐時值' : '日平均') + '；比對測站：' + lab,
       '感測器：數值和報表相同（異常值、空白、PM 為 0、PM2.5 大於 PM10、備註時段／疑似異常／手動設為不採用的小時都不列入）' + (trResult.hourly ? '。' : '；日平均為當日有效小時的平均（雨量為加總），四捨五入到小數 1 位。'),
       '環境部測站：環境部空氣品質小時值，x、#、* 等無效值不計' + (trResult.hourly ? '。' : '；日平均為當日有效小時的平均（雨量為加總），四捨五入到小數 1 位。'),
-      '「趨勢圖」工作表：Excel 折線圖，環境部為紅色粗線；圖的資料在各測項工作表，修改數值圖會跟著更新。空白格＝沒有有效數值，折線會斷開。',
+      '「趨勢圖」工作表：Excel 折線圖，環境部測站為粗線（顏色如上）；圖的資料在各測項工作表，修改數值圖會跟著更新。空白格＝沒有有效數值，折線會斷開。',
       'Y 軸上限：' + trResult.charts.map(function (c) { return c.title + ' ' + c.yMax; }).join('、') + '（為了看趨勢，少數異常高值會超出圖頂端；要看全部請在圖上按右鍵「座標軸格式」把最大值改成自動）。',
       '產生時間：' + new Date().toLocaleString('zh-TW')];
     TR.buildTrendWorkbook(ExcelJS, window.JSZip, trResult.charts, info, trResult.hourly).then(function (buf) {

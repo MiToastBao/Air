@@ -728,3 +728,14 @@ test('Excel：短備註不換行不加高，很長的備註才換行加高', () 
   assert.equal(m.getRow(2).height, undefined);
   assert.ok(m.getRow(3).height > 30);
 });
+
+test('趨勢圖：環境部測站顏色彼此不重複，且不出現在感測器配色中', () => {
+  const TR = require('../js/trend.js');
+  assert.equal(new Set(TR.REF_COLORS).size, TR.REF_COLORS.length);
+  assert.ok(TR.REF_COLORS.length >= 5);
+  TR.REF_COLORS.forEach(c => assert.ok(TR.PALETTE.map(x => x.toLowerCase()).indexOf(c.toLowerCase()) < 0, c));
+  // 多站的 Excel 折線圖：每站用自己的顏色、粗線
+  const xml = TR.lineChartXml({ series: [{ name: 'A', color: '#1f77b4', nameRef: 'x', valRef: 'y' }, { name: '甲站', color: TR.REF_COLORS[0], ref: true, nameRef: 'x', valRef: 'y' }, { name: '乙站', color: TR.REF_COLORS[1], ref: true, nameRef: 'x', valRef: 'y' }], catRef: 'c', title: 't', yTitle: 'y', xTitle: 'x' });
+  assert.match(xml, /w="38100"[^>]*><a:solidFill><a:srgbClr val="E60000"/);
+  assert.match(xml, /w="38100"[^>]*><a:solidFill><a:srgbClr val="FF8C00"/);
+});

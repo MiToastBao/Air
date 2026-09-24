@@ -231,9 +231,11 @@
 
   // ---------------- 趨勢圖 ----------------
   var FONT = '"Microsoft JhengHei","微軟正黑體","PingFang TC","Noto Sans CJK TC","Noto Sans TC",sans-serif';
-  // 感測器用的顏色（刻意不用紅色系，紅色只給環境部）
-  var PALETTE = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#17becf', '#bcbd22', '#7f7f7f', '#e377c2', '#393b79', '#637939', '#8c6d31', '#6b6ecf', '#98df8a', '#aec7e8', '#c5b0d5', '#9edae5', '#dbdb8d', '#5254a3', '#b5cf6b', '#c49c94', '#3182bd', '#31a354', '#756bb1', '#636363'];
-  var REF_COLOR = '#e60000';
+  // 感測器用的顏色（刻意不用紅、橘、黑、桃紅，這些只給環境部測站）
+  var PALETTE = ['#1f77b4', '#2ca02c', '#9467bd', '#8c564b', '#17becf', '#bcbd22', '#7f7f7f', '#393b79', '#637939', '#8c6d31', '#6b6ecf', '#98df8a', '#aec7e8', '#c5b0d5', '#9edae5', '#dbdb8d', '#5254a3', '#b5cf6b', '#c49c94', '#3182bd', '#31a354', '#756bb1', '#636363'];
+  // 環境部測站用的顏色（粗線、畫在最上層）；多站比對時依序使用，彼此不重複，最多 5 站
+  var REF_COLORS = ['#e60000', '#ff8c00', '#000000', '#e6007e', '#6a00d4'];
+  var REF_COLOR = REF_COLORS[0];
   function niceScale(min, max, want) { return root.EnvBox ? root.EnvBox.niceScale(min, max, want) : (typeof require !== 'undefined' ? require('./boxplot.js').niceScale(min, max, want) : null); }
   function fmtTick(v, step) { var dec = 0; while (dec < 4 && Math.abs(Math.round(step * Math.pow(10, dec)) - step * Math.pow(10, dec)) > 1e-6) dec++; return v.toFixed(dec); }
   function md(ts) { return Number(ts.slice(5, 7)) + '/' + Number(ts.slice(8, 10)); }
@@ -298,7 +300,7 @@
       ln.forEach(function (it) {
         ctx.strokeStyle = it.s.color; ctx.lineWidth = it.s.ref ? 4 : 2;
         ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + 26, ly); ctx.stroke();
-        ctx.fillStyle = it.s.ref ? REF_COLOR : '#000'; ctx.textAlign = 'left'; ctx.font = (it.s.ref ? 'bold ' : '') + fs.legend + 'px ' + FONT;
+        ctx.fillStyle = it.s.ref ? it.s.color : '#000'; ctx.textAlign = 'left'; ctx.font = (it.s.ref ? 'bold ' : '') + fs.legend + 'px ' + FONT;
         ctx.fillText(it.s.name, lx + 32, ly);
         lx += colW;
       });
@@ -458,7 +460,7 @@
     series.forEach(function (s) { s.values.forEach(function (v) { if (typeof v === 'number' && v > sc.max) cut++; }); });
     return { max: sc.max, cut: cut };
   }
-  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, parseMoenvCsv: parseMoenvCsv, fetchMonth: fetchMonth, fetchStations: fetchStations, apiUrl: apiUrl, datasetOf: datasetOf, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, STATIONS_API: STATIONS_API, DATASET_OVERRIDE: DATASET_OVERRIDE, FALLBACK_STATIONS: FALLBACK_STATIONS, nextMonth: nextMonth, mergeChunk: mergeChunk, stationHours: stationHours, dailyOf: dailyOf, chunkSummary: chunkSummary, rawRows: rawRows, toCsv: toCsv, buildRawWorkbook: buildRawWorkbook, migrateLegacy: migrateLegacy, TREND_ITEMS: TREND_ITEMS, unitText: unitText, num: num, RAW_COLS: RAW_COLS, drawTrend: drawTrend, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, splitCsv: splitCsv };
+  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, parseMoenvCsv: parseMoenvCsv, fetchMonth: fetchMonth, fetchStations: fetchStations, apiUrl: apiUrl, datasetOf: datasetOf, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, STATIONS_API: STATIONS_API, DATASET_OVERRIDE: DATASET_OVERRIDE, FALLBACK_STATIONS: FALLBACK_STATIONS, nextMonth: nextMonth, mergeChunk: mergeChunk, stationHours: stationHours, dailyOf: dailyOf, chunkSummary: chunkSummary, rawRows: rawRows, toCsv: toCsv, buildRawWorkbook: buildRawWorkbook, migrateLegacy: migrateLegacy, TREND_ITEMS: TREND_ITEMS, unitText: unitText, num: num, RAW_COLS: RAW_COLS, drawTrend: drawTrend, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, REF_COLORS: REF_COLORS, splitCsv: splitCsv };
   root.EnvTrend = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

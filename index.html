@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>微型感測器數據系統</title>
-<link rel="stylesheet" href="css/app.css?v=1.18.0">
+<link rel="stylesheet" href="css/app.css?v=1.19.0">
 </head>
 <body>
 <header class="top">
@@ -284,7 +284,7 @@
     <div class="card">
       <h2>環境部測站資料</h2>
       <div class="row">測站 <select id="moeSite" style="max-width:340px"></select> <button type="button" id="moeStRefresh">更新測站清單</button> <span class="hint" id="moeStHint"></span></div>
-      <div class="row">圖例名稱 <input type="text" id="moeLabel" style="width:220px"> <span class="hint">（圖上這個測站紅線的名稱）</span></div>
+      <div class="row">圖例名稱 <input type="text" id="moeLabel" style="width:220px"> <span class="hint">（趨勢圖上這個測站的名稱）</span></div>
       <h3>自動抓取或下載原始數據</h3>
       <div class="row">月份 從 <input type="month" id="apiFrom"> 到 <input type="month" id="apiTo">
         <button type="button" id="apiGo" class="primary">從環境部自動抓取</button> <button type="button" id="apiTest">測試連線</button></div>
@@ -303,7 +303,7 @@
     </div>
     <div class="card">
       <h2>產生趨勢圖</h2>
-      <p class="hint">每台感測器和環境部測站的同一測項畫在同一張圖（每個勾選的測項一張）。環境部測站是<b style="color:#e60000">紅色粗線</b>，一眼就能看出各感測器的趨勢是否和環境部一致。感測器採用的數值和報表相同（異常、不採用的小時不計）。</p>
+      <p class="hint">每台感測器和環境部測站的同一測項畫在同一張圖（每個勾選的測項一張）。環境部測站是<b>粗線</b>、畫在最上層（第 1 站紅、第 2 站橘、第 3 站黑、第 4 站桃紅、第 5 站紫，彼此不重複，感測器不會用到這些顏色），一眼就能看出各感測器的趨勢是否和環境部一致。感測器採用的數值和報表相同（異常、不採用的小時不計）。</p>
       <div class="modes">
         <label><input type="radio" name="trMode" value="month" checked> 單月</label>
         <label><input type="radio" name="trMode" value="months"> 月份區間</label>
@@ -316,6 +316,8 @@
         到 民國 <input type="number" id="trQY2" class="num" min="100" max="200"> 年 <select id="trQ2"><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select></div>
       <div class="row" data-tr="dates" hidden>從 <input type="date" id="trDFrom"> 到 <input type="date" id="trDTo"></div>
       <div class="row">資料 <label class="bf"><input type="radio" name="trFreq" value="day" checked> 日平均</label><label class="bf"><input type="radio" name="trFreq" value="hour"> 逐時</label></div>
+      <h3>比對的環境部測站 <span class="hint">（可勾選多站，最多 5 站；只列出已抓取或匯入資料的測站，要加其他測站請先在上方選測站並抓取）</span></h3>
+      <div class="row" id="trRefs"></div>
       <h3>測項 <span class="hint">（每個勾選的測項畫一張圖；微型感測器有該測項、或環境部測站有該測項才會列出）</span></h3>
       <div class="row" id="trItems"></div>
       <h3>感測器 <span class="hint">（圖例用「⑤ 感測器編號與名稱」的名稱；不想畫的取消勾選，會記住）</span></h3>
@@ -402,18 +404,18 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.18.0"></script>
-<script src="js/version.js?v=1.18.0"></script>
-<script src="js/core.js?v=1.18.0"></script>
-<script src="js/parser.js?v=1.18.0"></script>
-<script src="js/xlsxio.js?v=1.18.0"></script>
-<script src="js/model.js?v=1.18.0"></script>
-<script src="js/store.js?v=1.18.0"></script>
-<script src="vendor/jszip.min.js?v=1.18.0"></script>
-<script src="js/boxstyle.js?v=1.18.0"></script>
-<script src="js/boxplot.js?v=1.18.0"></script>
-<script src="js/trend.js?v=1.18.0"></script>
-<script src="js/app.js?v=1.18.0"></script>
+<script src="vendor/exceljs.min.js?v=1.19.0"></script>
+<script src="js/version.js?v=1.19.0"></script>
+<script src="js/core.js?v=1.19.0"></script>
+<script src="js/parser.js?v=1.19.0"></script>
+<script src="js/xlsxio.js?v=1.19.0"></script>
+<script src="js/model.js?v=1.19.0"></script>
+<script src="js/store.js?v=1.19.0"></script>
+<script src="vendor/jszip.min.js?v=1.19.0"></script>
+<script src="js/boxstyle.js?v=1.19.0"></script>
+<script src="js/boxplot.js?v=1.19.0"></script>
+<script src="js/trend.js?v=1.19.0"></script>
+<script src="js/app.js?v=1.19.0"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>
