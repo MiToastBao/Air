@@ -244,7 +244,8 @@
    * spec = { title, yTitle, xTitle, x:[ts...], series:[{name, color, values:[...], ref}], yMin, yMax, showTitle }
    * 圖例放上方、自動換行；日期標籤依寬度自動跳著標，不重疊；環境部線條紅色加粗、畫在最上層。
    */
-  function drawTrend(canvas, spec, scale) {
+  // hiIdx：滑鼠停留的那條線（spec.series 的索引），加粗並畫在最上層；只用在畫面上，下載的圖不傳
+  function drawTrend(canvas, spec, scale, hiIdx, hiPt) {
     scale = scale || 1;
     var ctx = canvas.getContext('2d');
     var fs = { title: 22, axis: 17, tick: 14, legend: 14 };
@@ -336,8 +337,9 @@
     });
     // 線（感測器先畫，環境部最後畫在最上層）
     ctx.save(); ctx.beginPath(); ctx.rect(x0, y0 - 2, plotW, H + 4); ctx.clip();
-    spec.series.filter(function (s) { return !s.ref; }).concat(spec.series.filter(function (s) { return s.ref; })).forEach(function (s) {
-      ctx.strokeStyle = s.color; ctx.lineWidth = s.ref ? 3.2 : 1.3; ctx.lineJoin = 'round';
+    var hs = typeof hiIdx === 'number' ? spec.series[hiIdx] : null;
+    spec.series.filter(function (s) { return !s.ref && s !== hs; }).concat(spec.series.filter(function (s) { return s.ref && s !== hs; })).concat(hs ? [hs] : []).forEach(function (s) {
+      ctx.strokeStyle = s.color; ctx.lineWidth = (s.ref ? 3.2 : 1.3) + (s === hs ? 2.2 : 0); ctx.lineJoin = 'round';
       ctx.beginPath(); var pen = false;
       s.values.forEach(function (v, i) {
         if (v === null || v === undefined) { pen = false; return; }
@@ -345,12 +347,44 @@
       });
       ctx.stroke();
     });
+    // 滑鼠停留的資料點：圓點標示
+    if (hs && typeof hiPt === 'number' && typeof hs.values[hiPt] === 'number') {
+      var pv = Math.min(Math.max(hs.values[hiPt], sc.min), sc.max);
+      ctx.beginPath(); ctx.arc(X(hiPt), Y(pv), 5.5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 2.6; ctx.strokeStyle = hs.color; ctx.stroke();
+    }
     ctx.restore();
     // 軸標題
     ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs.axis + 'px ' + FONT;
     ctx.fillText(spec.xTitle, x0 + plotW / 2, Ht - pad - fs.axis * 0.6);
     ctx.save(); ctx.translate(pad + fs.axis * 0.65, y0 + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(spec.yTitle, 0, 0); ctx.restore();
+    canvas._tr = { x0: x0, y0: y0, plotW: plotW, H: H, n: n, W: W, min: sc.min, max: sc.max, spec: spec }; // 給滑鼠浮動視窗用
     return { width: W, height: Ht };
+  }
+  /**
+   * 滑鼠浮動視窗：px、py＝滑鼠在圖上的位置（圖的座標，未乘 scale）。
+   * 找出最靠近滑鼠的那條線（依滑鼠所在位置的線段高度），太遠（> tol）就回傳 null。
+   * 回傳 {si: 線的索引, i: 最近的資料點索引, v: 該點數值}
+   */
+  function trendHit(L, px, py, tol) {
+    if (!L || px < L.x0 - 6 || px > L.x0 + L.plotW + 6 || py < L.y0 - 6 || py > L.y0 + L.H + 6) return null;
+    tol = tol || 10;
+    var n = L.n, f = n <= 1 ? 0 : (px - L.x0) / L.plotW * (n - 1);
+    f = Math.max(0, Math.min(n - 1, f));
+    var a = Math.floor(f), b = Math.min(n - 1, a + 1), t = f - a, near = t < 0.5 ? a : b;
+    var Y = function (v) { return L.y0 + L.H - (Math.min(Math.max(v, L.min), L.max) - L.min) / (L.max - L.min) * L.H; };
+    var best = null;
+    L.spec.series.forEach(function (s, si) {
+      var va = s.values[a], vb = s.values[b], y;
+      if (va !== null && va !== undefined && vb !== null && vb !== undefined) y = Y(va) + (Y(vb) - Y(va)) * t;
+      else if (s.values[near] !== null && s.values[near] !== undefined && Math.abs(f - near) < 0.5) y = Y(s.values[near]);
+      else return;
+      var d = Math.abs(y - py) - (s.ref ? 1.5 : 0);
+      if (d <= tol && (!best || d < best.d)) best = { si: si, d: d };
+    });
+    if (!best) return null;
+    var s = L.spec.series[best.si], i = near;
+    if (s.values[i] === null || s.values[i] === undefined) i = near === a ? b : a;
+    return { si: best.si, i: i, v: s.values[i] };
   }
 
   // ---------------- Excel（原生折線圖） ----------------
@@ -460,7 +494,7 @@
     series.forEach(function (s) { s.values.forEach(function (v) { if (typeof v === 'number' && v > sc.max) cut++; }); });
     return { max: sc.max, cut: cut };
   }
-  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, parseMoenvCsv: parseMoenvCsv, fetchMonth: fetchMonth, fetchStations: fetchStations, apiUrl: apiUrl, datasetOf: datasetOf, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, STATIONS_API: STATIONS_API, DATASET_OVERRIDE: DATASET_OVERRIDE, FALLBACK_STATIONS: FALLBACK_STATIONS, nextMonth: nextMonth, mergeChunk: mergeChunk, stationHours: stationHours, dailyOf: dailyOf, chunkSummary: chunkSummary, rawRows: rawRows, toCsv: toCsv, buildRawWorkbook: buildRawWorkbook, migrateLegacy: migrateLegacy, TREND_ITEMS: TREND_ITEMS, unitText: unitText, num: num, RAW_COLS: RAW_COLS, drawTrend: drawTrend, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, REF_COLORS: REF_COLORS, splitCsv: splitCsv };
+  var api = { autoYMax: autoYMax, parseMoenvJson: parseMoenvJson, parseMoenvCsv: parseMoenvCsv, fetchMonth: fetchMonth, fetchStations: fetchStations, apiUrl: apiUrl, datasetOf: datasetOf, DEFAULT_API: DEFAULT_API, DEFAULT_KEY: DEFAULT_KEY, STATIONS_API: STATIONS_API, DATASET_OVERRIDE: DATASET_OVERRIDE, FALLBACK_STATIONS: FALLBACK_STATIONS, nextMonth: nextMonth, mergeChunk: mergeChunk, stationHours: stationHours, dailyOf: dailyOf, chunkSummary: chunkSummary, rawRows: rawRows, toCsv: toCsv, buildRawWorkbook: buildRawWorkbook, migrateLegacy: migrateLegacy, TREND_ITEMS: TREND_ITEMS, unitText: unitText, num: num, RAW_COLS: RAW_COLS, drawTrend: drawTrend, trendHit: trendHit, buildTrendWorkbook: buildTrendWorkbook, lineChartXml: lineChartXml, PALETTE: PALETTE, REF_COLOR: REF_COLOR, REF_COLORS: REF_COLORS, splitCsv: splitCsv };
   root.EnvTrend = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

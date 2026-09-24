@@ -739,3 +739,15 @@ test('趨勢圖：環境部測站顏色彼此不重複，且不出現在感測�
   assert.match(xml, /w="38100"[^>]*><a:solidFill><a:srgbClr val="E60000"/);
   assert.match(xml, /w="38100"[^>]*><a:solidFill><a:srgbClr val="FF8C00"/);
 });
+
+test('趨勢圖滑鼠浮動視窗：找出最靠近滑鼠的線與數值', () => {
+  const TR = require('../js/trend.js');
+  const L = { x0: 100, y0: 50, plotW: 400, H: 200, n: 5, W: 600, min: 0, max: 10, spec: { series: [
+    { name: 'A', values: [2, 2, 2, 2, 2] }, { name: '測站', ref: true, values: [8, 8, null, 8, 8] }] } };
+  const Y = v => 50 + 200 - v / 10 * 200;
+  assert.deepEqual(TR.trendHit(L, 200, Y(2) + 3), { si: 0, i: 1, v: 2 });
+  assert.equal(TR.trendHit(L, 200, Y(8)).si, 1);
+  assert.equal(TR.trendHit(L, 200, Y(5)), null); // 離兩條線都太遠
+  assert.equal(TR.trendHit(L, 300, Y(8)), null); // 測站在這一點沒有資料（線斷開）
+  assert.equal(TR.trendHit(L, 50, Y(2)), null); // 在圖外
+});

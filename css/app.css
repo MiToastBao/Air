@@ -141,3 +141,11 @@ details.fold > summary::-webkit-details-marker{display:none}
 #bxSensors label{display:block;break-inside:avoid}
 #bxSensors{max-height:none}
 .tabs button{padding:8px 11px;font-size:14.5px}
+
+/* ⑨ 趨勢圖：滑鼠浮動視窗 */
+.trtip { position: fixed; z-index: 9999; pointer-events: none; background: rgba(255,255,255,.97); border: 1px solid #b8c2d0; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 7px 10px; font-size: 13px; line-height: 1.5; color: #1b2233; max-width: 320px; }
+.trtip .tt-name { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.trtip .tt-sw { display: inline-block; width: 18px; height: 4px; border-radius: 2px; }
+.trtip .tt-v b { font-size: 15px; }
+.trtip .tt-note { color: #b35c00; font-size: 12px; }
+canvas[data-trc] { cursor: crosshair; }

@@ -2205,6 +2205,7 @@
             return !st.has ? '<span class="hint">' + esc(st.label) + '沒有這個測項（或還沒抓取），圖上沒有這站的線。</span>' : !st.any ? '<span class="hint">這個期間沒有' + esc(st.label) + '的資料，圖上沒有這站的線。</span>' : st.missing ? '<span class="hint">有 ' + st.missing + ' ' + unit + '沒有' + esc(st.label) + '資料，這站的線在這些地方會斷開。</span>' : '';
           }).join('') + '</div></div>';
       }).join('');
+      trHover = { cv: null, si: null, i: null }; if (trTip) trTip.hidden = true;
       charts.forEach(function (c, i) { TR.drawTrend(document.querySelector('canvas[data-trc="' + i + '"]'), c, 1.5); });
       $('trXlsx').disabled = false; $('trPngs').disabled = false;
       $('trMsg').innerHTML = '<div class="msg ok">期間 <b>' + esc(r.title) + '</b>（' + Core.toRoc(r.from) + '～' + Core.toRoc(r.to) + '），' + (b.hourly ? '逐時' : '日平均') + '，比對測站：' + esc(lab) + '：已產生 ' + charts.length + ' 張趨勢圖。' +
@@ -2215,6 +2216,40 @@
     var pc = (Store.current() && Store.current().code) ? safeName(Store.current().code) + '_' : '', rs = trResult.refs || [];
     var st = rs.length ? (rs.length <= 3 ? rs.map(function (id) { return safeName(siteInfo(id).sitename); }).join('_') + '站' : safeName(siteInfo(rs[0]).sitename) + '等' + rs.length + '站') : '無測站';
     return pc + '環境部比對趨勢圖_' + st + '_' + trResult.range.label + (trResult.hourly ? '_逐時' : '_日平均'); }
+  // ---- 滑鼠移到線上：浮動視窗顯示是哪一台感測器（或哪個測站）、日期時間、數值；那條線加粗 ----
+  var trTip = null, trHover = { cv: null, si: null, i: null };
+  function trTipEl() {
+    if (!trTip) { trTip = document.createElement('div'); trTip.className = 'trtip'; trTip.hidden = true; document.body.appendChild(trTip); }
+    return trTip;
+  }
+  function trRedraw(cv, si, i) {
+    if (i === undefined) i = null;
+    if (trHover.cv === cv && trHover.si === si && trHover.i === i) return;
+    if (trHover.cv && trHover.cv !== cv && trResult) { var o = trHover.cv; TR.drawTrend(o, trResult.charts[+o.dataset.trc], 1.5); }
+    trHover = { cv: cv, si: si, i: i };
+    if (cv && trResult) TR.drawTrend(cv, trResult.charts[+cv.dataset.trc], 1.5, si === null ? undefined : si, i === null ? undefined : i);
+  }
+  $('trOut').addEventListener('mousemove', function (e) {
+    var cv = e.target.closest && e.target.closest('canvas[data-trc]');
+    var tip = trTipEl();
+    if (!cv || !trResult || !cv._tr) { tip.hidden = true; if (trHover.si !== null) trRedraw(trHover.cv, null); return; }
+    var rc = cv.getBoundingClientRect(), L = cv._tr, k = L.W / rc.width;
+    var h = TR.trendHit(L, (e.clientX - rc.left) * k, (e.clientY - rc.top) * k, 10 * Math.max(1, k * 0.8));
+    if (!h) { tip.hidden = true; trRedraw(cv, null); return; }
+    var c = trResult.charts[+cv.dataset.trc], s = c.series[h.si], t = c.x[h.i];
+    var when = c.hourly ? Core.toRoc(t.slice(0, 10)) + ' ' + t.slice(11, 16) : Core.toRoc(t);
+    var unit = (c.yTitle.match(/（([^）]*)）\s*$/) || [])[1] || '';
+    tip.innerHTML = '<div class="tt-name"><span class="tt-sw" style="background:' + s.color + '"></span>' + esc(s.name) + (s.ref ? '' : '') + '</div>' +
+      '<div>' + esc(when) + (c.hourly ? '' : '（日平均）') + '</div><div class="tt-v">' + esc(c.title) + '：<b>' + esc(String(Math.round(h.v * 1000) / 1000)) + '</b> ' + esc(unit) + '</div>' +
+      (typeof c.yMax === 'number' && h.v > c.yMax ? '<div class="tt-note">超過 Y 軸上限，線在圖頂端截斷</div>' : '');
+    tip.hidden = false;
+    var x = e.clientX + 16, y = e.clientY + 16, w = tip.offsetWidth, hh = tip.offsetHeight;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - 16;
+    if (y + hh > window.innerHeight - 8) y = e.clientY - hh - 16;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    trRedraw(cv, h.si, h.i);
+  });
+  $('trOut').addEventListener('mouseleave', function () { if (trTip) trTip.hidden = true; if (trHover.cv) trRedraw(trHover.cv, null); trHover = { cv: null, si: null, i: null }; });
   function trPngBlob(c) { return new Promise(function (res) { var cv = document.createElement('canvas'); TR.drawTrend(cv, c, 3); cv.toBlob(function (b) { res(b); }, 'image/png'); }); }
   $('trOut').addEventListener('click', function (e) {
     var i = e.target.dataset.trpng; if (i === undefined || !trResult) return;
