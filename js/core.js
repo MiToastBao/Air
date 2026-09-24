@@ -132,6 +132,60 @@
     return out.join('、');
   }
 
+  // 顯示寬度（Excel 欄寬單位約＝一個半形字）：中文、全形符號算 2，半形算 1
+  function textWidth(t) {
+    var w = 0;
+    for (var i = 0; i < t.length; i++) { var c = t.charCodeAt(i); w += (c >= 0x2000 && c <= 0x206F) ? 1 : c >= 0x1100 ? 2 : (c >= 65 && c <= 90) ? 1.25 : 1; } // 大寫英文字較寬
+    return w;
+  }
+  function shownText(v, fmt) {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) return fmt && /hh/.test(fmt) ? '0000/00/00 00:00' : '0000/00/00';
+    if (typeof v === 'number') { var m = /^0\.(0+)$/.exec(fmt || ''); return m ? v.toFixed(m[1].length) : String(v); }
+    if (typeof v === 'object') {
+      if ('result' in v) return shownText(v.result, fmt);
+      if (v.richText) return v.richText.map(function (t) { return t.text; }).join('');
+      if ('text' in v) return String(v.text);
+    }
+    return String(v);
+  }
+  /** 匯出 Excel 共用：依內容自動欄寬（標題與每一格取最寬；多行的格子取最長那一行），不讓文字或數字被截斷或換行 */
+  function xlAutoFit(ws, skip) {
+    var nCols = ws.columnCount || 0;
+    for (var c = 1; c <= nCols; c++) {
+      if (skip && skip.indexOf(c) >= 0) continue; // 例如備註欄：維持固定欄寬＋換行
+      var col = ws.getColumn(c), fmt = col.numFmt, w = 0;
+      col.eachCell({ includeEmpty: false }, function (cell, rn) {
+        if (cell.value === null || cell.value === undefined || cell.value === '') return;
+        var lines = shownText(cell.value, cell.numFmt || fmt).split('\n');
+        lines.forEach(function (l) { var x = textWidth(l) * (rn === 1 ? 1.15 : 1) + (rn === 1 ? 5 : 2); if (x > w) w = x; }); // 標題粗體較寬，並預留篩選箭頭
+      });
+      if (w > 0) col.width = Math.min(255, Math.max(6, Math.ceil(w))); // 空白欄（例如放圖的欄）不動
+    }
+  }
+  /** 長文字欄（備註、說明）：固定欄寬、自動換行 */
+  function xlWrapCol(ws, c, width) {
+    var col = ws.getColumn(c);
+    col.width = width;
+    col.eachCell({ includeEmpty: false }, function (cell, rn) { cell.alignment = Object.assign({}, cell.alignment || {}, { wrapText: true, vertical: rn === 1 ? 'middle' : (cell.alignment && cell.alignment.vertical) || 'middle' }); });
+  }
+  /** 有換行的列設定列高（依欄寬估算行數；Excel 開檔不一定會自動調整列高） */
+  function xlFitHeights(ws, lineH) {
+    lineH = lineH || 16;
+    ws.eachRow(function (row) {
+      var lines = 1;
+      row.eachCell({ includeEmpty: false }, function (cell, cn) {
+        if (!cell.alignment || !cell.alignment.wrapText) return;
+        var w = Math.max(4, (ws.getColumn(cn).width || 9) - 1.5), n = 0;
+        shownText(cell.value, cell.numFmt).split('\n').forEach(function (l) { n += Math.max(1, Math.ceil(textWidth(l) / w)); });
+        if (n > lines) lines = n;
+      });
+      if (lines > 1) {
+        row.height = lineH * lines + 3;
+        row.eachCell({ includeEmpty: false }, function (cell) { if (!cell.alignment || !cell.alignment.vertical) cell.alignment = Object.assign({}, cell.alignment || {}, { vertical: 'middle' }); }); // 同一列其他格垂直置中
+      }
+    });
+  }
   var CALM_TEXT = '<0.3'; // 全天靜風時最頻風向欄的文字
   var CALM_WS = 0.3; // 風速 < 0.3 m/s 的那一小時，風向不列入最頻風向（剛好 0.3 要計入）
 
@@ -408,6 +462,10 @@
         var calm = rows.filter(function (r) { return validValue(r.v.WD) !== null && validValue(r.v.WS) !== null; }).length;
         if (calm) { rec.WD = rec.WD8 = rec.WD16S = rec.WD16A = rec.WD8S = rec.WD8A = CALM_TEXT; note += '；全天風速都 < 0.3 m/s（靜風 ' + calm + ' 小時），最頻風向記為「' + CALM_TEXT + '」'; }
       }
+      // 主工作表的最頻風向＝8 方位、並列時取平均風速較大者（使用者 2026-09-24 指定），備註寫明並列情形
+      if (rec.WD8 && rec.WD8.indexOf('、') >= 0) {
+        note += rec.WD8S && rec.WD8S.indexOf('、') < 0 ? '；8方位最頻風向並列（' + rec.WD8 + '），取平均風速較大者' : '；8方位最頻風向並列（' + rec.WD8 + '）且平均風速相同，全部列出';
+      }
     }
     if (rows.length && rows.length < 24) {
       var hs = {}; rows.forEach(function (r) { hs[hourOf(r.ts)] = true; });
@@ -499,7 +557,7 @@
     validValue: validValue, roundHalfUp1: roundHalfUp1, exactMean1: exactMean1, exactSum1: exactSum1,
     dirIndex: dirIndex, modeDirection: modeDirection, energyMean1: energyMean1, noisePeriod: noisePeriod,
     quarterRange: quarterRange, toRoc: toRoc, addDays: addDays, daysBetween: daysBetween,
-    buildReports: buildReports, DEFAULT_NOISE: DEFAULT_NOISE, noiseCfg: noiseCfg, checkNoise: checkNoise, describeNoise: describeNoise, NOISE_LABEL: NOISE_LABEL, pmRatioClean: pmRatioClean, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs, modeDirection8: modeDirection8, modeTieBreak: modeTieBreak, windObs: windObs, dirIndex8: dirIndex8, DIR8: DIR8
+    buildReports: buildReports, DEFAULT_NOISE: DEFAULT_NOISE, noiseCfg: noiseCfg, checkNoise: checkNoise, describeNoise: describeNoise, NOISE_LABEL: NOISE_LABEL, pmRatioClean: pmRatioClean, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs, xlAutoFit: xlAutoFit, xlWrapCol: xlWrapCol, xlFitHeights: xlFitHeights, textWidth: textWidth, modeDirection8: modeDirection8, modeTieBreak: modeTieBreak, windObs: windObs, dirIndex8: dirIndex8, DIR8: DIR8
   };
   root.EnvCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

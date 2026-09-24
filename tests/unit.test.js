@@ -686,3 +686,45 @@ test('並列時再挑一個：取平均風速較大／看相鄰方位（16、8 �
   const r4 = one(mk([[90, 0.1], [270, 0.2]]), '2026-07-01').air[0];
   assert.equal(r4.WD16S, '<0.3'); assert.equal(r4.WD8A, '<0.3');
 });
+
+test('Excel：主工作表欄位順序；並列以「、」不換行；備註左側與風向欄依內容自動欄寬，只有備註換行', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const mk = (id, dirs) => ({ id, name: '測試感測器' + id + '(含風速風向)', fields: ['TMP', 'WD', 'WS'], rows: dirs.map((d, h) => ({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { TMP: 25, WD: d, WS: 1 } })) });
+  const air = Core.buildReports([mk('B', [90, 90, 270]), mk('A', [0, 180])], { from: '2026-07-01', to: '2026-07-01' }).air;
+  const wb = X.buildAirWorkbook(ExcelJS, air, { includeRain: false });
+  assert.deepEqual(wb.worksheets.map(w => w.name), ['空氣品質日均', '最頻風向說明']);
+  const m = wb.getWorksheet('空氣品質日均');
+  const H = m.getRow(1).values.slice(1);
+  assert.deepEqual(H.slice(9), ['最頻風向8(風速大)', '備註', '最頻風向(16方位)', '最頻風向16(風速大)', '最頻風向16(相鄰方位)', '最頻風向(8方位)', '最頻風向8(相鄰方位)']);
+  air.forEach((r, i) => {
+    const v = m.getRow(i + 2).values.slice(1);
+    assert.deepEqual([v[9], v[11], v[12], v[13], v[14], v[15]], [r.WD8S, r.WD, r.WD16S, r.WD16A, r.WD8, r.WD8A]);
+  });
+  const tie = air.findIndex(r => r.WD === '北、南') + 2;
+  assert.ok(tie >= 2); assert.equal(m.getRow(tie).getCell(12).value, '北、南'); assert.ok(!m.getRow(tie).getCell(12).alignment.wrapText);
+  assert.match(air[tie - 2].note, /8方位最頻風向並列（北、南）且平均風速相同，全部列出/);
+  assert.equal(m.getRow(1).alignment.wrapText, undefined); // 標題不換行
+  assert.ok(m.getColumn(2).width >= Core.textWidth('測試感測器B(含風速風向)') + 2);
+  assert.equal(m.getColumn(11).width, Math.min(70, Math.ceil(Math.max(...air.map(r => Core.textWidth(r.note) + 2))))); assert.equal(m.getRow(2).getCell(11).alignment.wrapText, true); // 備註：依內容、最寬 70，超過才換行
+  assert.ok(!m.getRow(2).getCell(2).alignment || !m.getRow(2).getCell(2).alignment.wrapText);
+});
+
+test('主工作表最頻風向＝8 方位並列取平均風速較大者，備註寫明', () => {
+  const rows = [[0, 1], [0, 1], [180, 3], [180, 3]].map(([d, w], h) => ({ ts: '2026-07-01 0' + h + ':00', v: { WD: d, WS: w } }));
+  const r = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows }, '2026-07-01').air[0];
+  assert.equal(r.WD8, '北、南'); assert.equal(r.WD8S, '南');
+  assert.match(r.note, /8方位最頻風向並列（北、南），取平均風速較大者/);
+});
+
+test('Excel：短備註不換行不加高，很長的備註才換行加高', () => {
+  const ExcelJS = require('../vendor/exceljs.min.js');
+  const X = require('../js/xlsxio.js');
+  const base = { id: 'A', name: 'A', date: '2026-07-01', fields: ['TMP'], TMP: 25 };
+  const rows = [Object.assign({}, base, { note: '有效資料24小時' }), Object.assign({}, base, { date: '2026-07-02', note: '有效資料24小時；' + '月報備註：公司伺服器問題×1；'.repeat(8) })];
+  const m = X.buildAirWorkbook(ExcelJS, rows, {}).getWorksheet(1);
+  const nc = m.getRow(1).values.indexOf('備註');
+  assert.equal(m.getColumn(nc).width, 70);
+  assert.equal(m.getRow(2).height, undefined);
+  assert.ok(m.getRow(3).height > 30);
+});

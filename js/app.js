@@ -690,7 +690,6 @@
     var ws = wb.addWorksheet('感測器對照');
     ws.addRow(['月報感測器編號', '報表感測器編號', '感測器名稱', '月報表頭文字（參考，不會匯入）']);
     allSensorMeta().forEach(function (s) { ws.addRow([s.id, s.reportId || s.id, s.name, s.label || '']); });
-    [16, 16, 28, 36].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
     ws.getRow(1).font = { bold: true };
     ws.getColumn(1).numFmt = '@'; ws.getColumn(2).numFmt = '@';
     var note = wb.addWorksheet('說明');
@@ -701,7 +700,8 @@
      '4. 可以新增還沒有資料的感測器（先記下，之後匯入月報時就會使用）。',
      '5. 同一個報表編號不可以對應到兩台感測器。',
      '6. 存檔後到「⑤ 感測器編號與名稱」按「匯入對照表」，確認內容後按「確認套用」。'].forEach(function (t) { note.addRow([t]); });
-    note.getColumn(1).width = 90; note.getRow(1).font = { bold: true };
+    note.getRow(1).font = { bold: true };
+    Core.xlAutoFit(ws); Core.xlWrapCol(note, 1, 90); Core.xlFitHeights(note);
     wb.xlsx.writeBuffer().then(function (buf) {
       download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), '感測器編號對照範本_' + stamp() + '.xlsx');
     });

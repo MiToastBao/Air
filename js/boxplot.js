@@ -4,6 +4,7 @@
  */
 (function (root) {
   'use strict';
+  var Core = root.EnvCore || (typeof require !== 'undefined' ? require('./core.js') : null);
 
   // 盒鬚圖的測項（風速、風向、雨量不畫）
   var BOX_FIELDS = [
@@ -229,7 +230,8 @@
           row.getCell(dc + 3).value = x.v;
         });
       });
-      ws.getColumn(dc + 1).width = 26; ws.getColumn(dc + 2).width = 17; ws.getColumn(dc + 2).numFmt = 'yyyy/mm/dd hh:mm'; ws.getColumn(dc + 3).width = 12;
+      ws.getColumn(dc + 2).numFmt = 'yyyy/mm/dd hh:mm';
+      Core.xlAutoFit(ws); // 只調有資料的欄；放圖的空白欄不動
       ws.getRow(1).font = { bold: true };
       var last = Math.max(2, r - 1);
       var A = colName(dc), B = colName(dc + 2);
@@ -245,11 +247,11 @@
       });
     });
     st.getRow(1).font = { bold: true };
-    [10, 26, 11, 9, 16, 9, 16, 9, 9, 9, 9, 11].forEach(function (w, i) { st.getColumn(i + 1).width = w; });
     for (var k = 4; k <= 11; k++) st.getColumn(k).numFmt = '0.00';
+    Core.xlAutoFit(st);
     var ex = wb.addWorksheet('說明');
     (info || []).forEach(function (t) { ex.addRow([t]); });
-    ex.getColumn(1).width = 110;
+    Core.xlWrapCol(ex, 1, 110); Core.xlFitHeights(ex); // 說明：固定欄寬、換行
 
     return wb.xlsx.writeBuffer().then(function (buf) { return JSZip.loadAsync(buf); }).then(function (zip) {
       return Promise.all([zip.file('xl/workbook.xml').async('string'), zip.file('xl/_rels/workbook.xml.rels').async('string'), zip.file('[Content_Types].xml').async('string')]).then(function (a) {

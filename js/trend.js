@@ -146,13 +146,12 @@
       var p = t.split(/[- :]/).map(Number);
       ws.addRow([new Date(Date.UTC(p[0], p[1] - 1, p[2], p[3], p[4]))].concat(items.map(function (k) { var v = byTs[t][k]; if (v === undefined) return null; var n = num(v); return n !== null ? n : v; })));
     });
-    ws.getColumn(1).numFmt = 'yyyy/mm/dd hh:mm'; ws.getColumn(1).width = 17;
-    for (var i = 2; i <= items.length + 1; i++) ws.getColumn(i).width = 14;
-    ws.getRow(1).font = { bold: true }; ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+    ws.getColumn(1).numFmt = 'yyyy/mm/dd hh:mm';
+    ws.getRow(1).font = { bold: true }; Core.xlAutoFit(ws); ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
     raw.addRow(RAW_COLS);
     list.forEach(function (r) { raw.addRow(RAW_COLS.map(function (k) { return String(r[k] === undefined ? '' : r[k]); })); });
-    raw.getRow(1).font = { bold: true }; [8, 10, 12, 8, 14, 14, 10, 18, 12].forEach(function (w, i) { raw.getColumn(i + 1).width = w; });
-    var ex = wb.addWorksheet('說明'); (info || []).forEach(function (t) { ex.addRow([t]); }); ex.getColumn(1).width = 100;
+    raw.getRow(1).font = { bold: true }; Core.xlAutoFit(raw);
+    var ex = wb.addWorksheet('說明'); (info || []).forEach(function (t) { ex.addRow([t]); }); Core.xlWrapCol(ex, 1, 100); Core.xlFitHeights(ex);
     return wb;
   }
 
@@ -399,16 +398,17 @@
         row.getCell(1).value = new Date(Date.UTC(p[0], p[1] - 1, p[2], p[3] || 0, p[4] || 0));
         c.series.forEach(function (s, j) { var v = s.values[i]; if (v !== null && v !== undefined) row.getCell(j + 2).value = v; });
       });
-      ws.getColumn(1).numFmt = hourly ? 'yyyy/mm/dd hh:mm' : 'yyyy/mm/dd'; ws.getColumn(1).width = hourly ? 17 : 12;
-      for (var j = 0; j < c.series.length; j++) { ws.getColumn(j + 2).width = 14; ws.getColumn(j + 2).numFmt = '0.0'; }
-      ws.getRow(1).font = { bold: true }; ws.getRow(1).alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+      ws.getColumn(1).numFmt = hourly ? 'yyyy/mm/dd hh:mm' : 'yyyy/mm/dd';
+      for (var j = 0; j < c.series.length; j++) ws.getColumn(j + 2).numFmt = '0.0';
+      ws.getRow(1).font = { bold: true }; ws.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+      Core.xlAutoFit(ws);
       ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
       var last = c.x.length + 1, sh = qs(c.sheet);
       meta.push({ c: c, catRef: sh + '!$A$2:$A$' + last, series: c.series.map(function (s, j) { var col = colName(j + 1); return { name: s.name, color: s.color, ref: s.ref, nameRef: sh + '!$' + col + '$1', valRef: sh + '!$' + col + '$2:$' + col + '$' + last }; }) });
     });
     var ex = wb.addWorksheet('說明');
     (info || []).forEach(function (t) { ex.addRow([t]); });
-    ex.getColumn(1).width = 110;
+    Core.xlWrapCol(ex, 1, 110); Core.xlFitHeights(ex);
     var days = charts.length ? (function () { var s = {}; charts[0].x.forEach(function (t) { s[t.slice(0, 10)] = 1; }); return Object.keys(s).length; })() : 0;
     var tickSkip = hourly ? Math.max(24, Math.ceil(days / 15) * 24) : Math.max(1, Math.ceil(days / 31));
     return wb.xlsx.writeBuffer().then(function (buf) { return JSZip.loadAsync(buf); }).then(function (zip) {
