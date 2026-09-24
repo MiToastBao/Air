@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>微型感測器數據系統</title>
-<link rel="stylesheet" href="css/app.css?v=1.13.0">
+<link rel="stylesheet" href="css/app.css?v=1.15.0">
 </head>
 <body>
 <header class="top">
@@ -237,7 +237,7 @@
       <ul class="rules">
         <li>負值（-9999 等）、空白、文字＝儀器異常，不計入、也不當 0。PM 為 0、PM2.5 大於 PM10 也不計（可在上方選項關閉）。</li>
         <li>空品：當日有效值平均，一般四捨五入到小數 1 位；雨量為當日加總。</li>
-        <li>最頻風向：角度換算 16 方位，只採計風速 ≥ 0.3 m/s 的小時（小於 0.3 不計），取當日出現次數最多者；並列最多時全部列出（例：「南、西南」）。</li>
+        <li>最頻風向：報表列 8 方位（在日累積雨量左邊）與 16 方位（在備註右邊），另有並列時再挑一個的參考欄「最頻風向16／8(風速大)」「最頻風向16／8(相鄰方位)」，算法寫在 Excel 的「最頻風向說明」分頁。角度直接換算方位（16 方位每格 22.5°、北＝348.75°～11.25°；8 方位每格 45°、北＝337.5°～22.5°），只採計風速 ≥ 0.3 m/s 的小時（小於 0.3 不計），取當日出現次數最多者；並列最多時全部列出（例：「南、西南」）。全天靜風兩欄都寫「&lt;0.3」。</li>
         <li>噪音：能量平均；日／晚／夜時段依「⑦ 噪音時段設定」（出廠預設：日 06–20、晚 20–22、夜＝當日 00–06 加 22–24）。</li>
         <li>備註欄列出有效資料小時數、確認不採用的小時數，以及月報原本的備註（例如「伺服器異常×4」）。</li>
         <li>「② 資料異常確認」中勾選不採用的數值，不列入計算。</li>
@@ -402,18 +402,18 @@
   <span id="ver"></span> ・ <a href="使用說明.html" target="_blank">使用說明</a> ・ 資料只存在您的瀏覽器
 </footer>
 
-<script src="vendor/exceljs.min.js?v=1.13.0"></script>
-<script src="js/version.js?v=1.13.0"></script>
-<script src="js/core.js?v=1.13.0"></script>
-<script src="js/parser.js?v=1.13.0"></script>
-<script src="js/xlsxio.js?v=1.13.0"></script>
-<script src="js/model.js?v=1.13.0"></script>
-<script src="js/store.js?v=1.13.0"></script>
-<script src="vendor/jszip.min.js?v=1.13.0"></script>
-<script src="js/boxstyle.js?v=1.13.0"></script>
-<script src="js/boxplot.js?v=1.13.0"></script>
-<script src="js/trend.js?v=1.13.0"></script>
-<script src="js/app.js?v=1.13.0"></script>
+<script src="vendor/exceljs.min.js?v=1.15.0"></script>
+<script src="js/version.js?v=1.15.0"></script>
+<script src="js/core.js?v=1.15.0"></script>
+<script src="js/parser.js?v=1.15.0"></script>
+<script src="js/xlsxio.js?v=1.15.0"></script>
+<script src="js/model.js?v=1.15.0"></script>
+<script src="js/store.js?v=1.15.0"></script>
+<script src="vendor/jszip.min.js?v=1.15.0"></script>
+<script src="js/boxstyle.js?v=1.15.0"></script>
+<script src="js/boxplot.js?v=1.15.0"></script>
+<script src="js/trend.js?v=1.15.0"></script>
+<script src="js/app.js?v=1.15.0"></script>
 <div id="toast" class="toast" hidden></div>
 </body>
 </html>

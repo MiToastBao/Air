@@ -652,3 +652,37 @@ test('月報解析：氣體類欄位（SO2、NO2、NO、NOx、CO、CO2、O3…�
   assert.deepEqual(r.sensors[0].fields.sort(), ['PM10', 'SO2']);
   assert.equal(r.sensors[0].rows[0].v.SO2, 3.5);
 });
+
+test('8 方位最頻風向：直接由度數換算（北＝337.5～22.5），和 16 方位並列', () => {
+  assert.equal(Core.dirIndex8(337.5), 0); assert.equal(Core.dirIndex8(22.4), 0); assert.equal(Core.dirIndex8(22.5), 1);
+  assert.equal(Core.dirIndex8(200), 4); assert.equal(Core.dirIndex8(359.9), 0);
+  // 16 方位：北北東 3 小時、東北 2 小時 → 最頻「北北東」；8 方位：20°(北)、30°×2(東北)… 由度數各自換算
+  const rows = [];
+  [20, 20, 20, 45, 45, 30, 30].forEach((d, h) => rows.push({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: d, WS: 1 } }));
+  const r = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows }, '2026-07-01').air[0];
+  assert.equal(r.WD, '北北東'); // 16：20°、30°×2 都是北北東（11.25～33.75）= 5 小時
+  assert.equal(r.WD8, '東北'); // 8：20°×3 是北、30°×2＋45°×2 是東北（22.5～67.5）= 4 → 東北
+  const calm = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows: hours('2026-07-01', () => ({ WD: 90, WS: 0.1 })) }, '2026-07-01').air[0];
+  assert.equal(calm.WD8, '<0.3');
+  const tie = one({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows: [0, 0, 180, 180].map((d, h) => ({ ts: '2026-07-01 0' + h + ':00', v: { WD: d, WS: 1 } })) }, '2026-07-01').air[0];
+  assert.equal(tie.WD8, '北、南');
+});
+
+test('並列時再挑一個：取平均風速較大／看相鄰方位（16、8 方位）', () => {
+  const mk = list => ({ id: 'W', name: 'W', fields: ['WD', 'WS'], rows: list.map(([d, w], h) => ({ ts: '2026-07-01 ' + String(h).padStart(2, '0') + ':00', v: { WD: d, WS: w } })) });
+  // 北 2 小時（風速 1、1）、南 2 小時（風速 3、3）、北北東 1 小時 → 16 方位並列 北、南
+  const r = one(mk([[0, 1], [0, 1], [180, 3], [180, 3], [22, 1]]), '2026-07-01').air[0];
+  assert.equal(r.WD, '北、南');
+  assert.equal(r.WD16S, '南');      // 南的平均風速 3 > 北 1
+  assert.equal(r.WD16A, '北');      // 北＋相鄰（北北東 1）＝3 > 南＋相鄰＝2
+  assert.equal(r.WD8, '北');        // 8 方位：0、0、22 都是北 = 3 → 沒有並列
+  assert.equal(r.WD8S, '北'); assert.equal(r.WD8A, '北');
+  // 風速也相同 → 仍全部列出
+  const r2 = one(mk([[90, 2], [270, 2]]), '2026-07-01').air[0];
+  assert.equal(r2.WD16S, '東、西'); assert.equal(r2.WD16A, '東、西');
+  // 沒有並列 → 等於一般最頻風向；靜風 → <0.3
+  const r3 = one(mk([[90, 2], [90, 2], [270, 2]]), '2026-07-01').air[0];
+  assert.equal(r3.WD16S, '東'); assert.equal(r3.WD8A, '東');
+  const r4 = one(mk([[90, 0.1], [270, 0.2]]), '2026-07-01').air[0];
+  assert.equal(r4.WD16S, '<0.3'); assert.equal(r4.WD8A, '<0.3');
+});

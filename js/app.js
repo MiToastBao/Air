@@ -1087,7 +1087,7 @@
         A[kind].forEach(function (ra) {
           if (ds.indexOf(ra.date) < 0) return;
           var rb = bmap[ra.date];
-          var F = kind === 'air' ? [['TMP', 'TMP'], ['HUM', 'HUM'], ['PM10', 'PM10'], ['PM25', 'PM2.5'], ['TVOC', 'TVOC'], ['WS', 'WS'], ['WD', '最頻風向'], ['RA', '雨量']]
+          var F = kind === 'air' ? [['TMP', 'TMP'], ['HUM', 'HUM'], ['PM10', 'PM10'], ['PM25', 'PM2.5'], ['TVOC', 'TVOC'], ['WS', 'WS'], ['WD8', '最頻風向(8方位)'], ['RA', '雨量'], ['WD', '最頻風向(16方位)'], ['WD16S', '最頻風向16(風速大)'], ['WD16A', '最頻風向16(相鄰方位)'], ['WD8S', '最頻風向8(風速大)'], ['WD8A', '最頻風向8(相鄰方位)']]
             : [['DAY', 'Leq日'], ['EVE', 'Leq晚'], ['NIGHT', 'Leq夜']];
           F.forEach(function (f) { if (ra[f[0]] !== rb[f[0]]) out.push([id, ra.date, f[1], ra[f[0]], rb[f[0]]]); });
         });
@@ -1143,7 +1143,7 @@
     var out = [];
     ['air', 'noise'].forEach(function (kind) {
       var bm = {}; B[kind].forEach(function (r) { bm[r.date] = r; });
-      var F = kind === 'air' ? [['TMP', 'TMP'], ['HUM', 'HUM'], ['PM10', 'PM10'], ['PM25', 'PM2.5'], ['TVOC', 'TVOC'], ['WS', 'WS'], ['WD', '最頻風向'], ['RA', '雨量']] : [['DAY', 'Leq日'], ['EVE', 'Leq晚'], ['NIGHT', 'Leq夜']];
+      var F = kind === 'air' ? [['TMP', 'TMP'], ['HUM', 'HUM'], ['PM10', 'PM10'], ['PM25', 'PM2.5'], ['TVOC', 'TVOC'], ['WS', 'WS'], ['WD8', '最頻風向(8方位)'], ['RA', '雨量'], ['WD', '最頻風向(16方位)'], ['WD16S', '最頻風向16(風速大)'], ['WD16A', '最頻風向16(相鄰方位)'], ['WD8S', '最頻風向8(風速大)'], ['WD8A', '最頻風向8(相鄰方位)']] : [['DAY', 'Leq日'], ['EVE', 'Leq晚'], ['NIGHT', 'Leq夜']];
       A[kind].forEach(function (ra) { var rb = bm[ra.date]; F.forEach(function (f) { if (rb && ra[f[0]] !== rb[f[0]]) out.push([ra.date, f[1], ra[f[0]], rb[f[0]]]); }); });
     });
     pc.imp[g.key] = out;

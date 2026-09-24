@@ -8,6 +8,7 @@
  *  - 空品各項：當日有效值算術平均。雨量：當日有效值加總（日累積雨量）。
  *  - 最頻風向：風向角度換算 16 方位文字（每方位 22.5°，北 = 348.75°～11.25°），
  *    只採計同一小時風速有效且 ≥ 0.3 m/s 者，取當日出現次數最多的方位；
+ *    另算 8 方位（每方位 45°，北 = 337.5°～22.5°，直接由角度換算），規則相同，報表另成一欄。
  *    若 N 個方位並列最多，N 個方位全部列出（北起順時針，以「、」分隔），只寫方位（不加「風」字），例：「北、西北」。
  *  - 噪音：日 06–20 時、晚 20–22 時、夜 = 同一日曆日的 00–06 時加 22–24 時；
  *    各時段以能量平均：10·log10(平均(10^(L/10)))。
@@ -25,6 +26,7 @@
     WS: 'WS', WD: 'WD', RA: '雨量', LEQ: 'Leq', LMAX: 'Leq(max)',
     SO2: 'SO2', NO2: 'NO2', NO: 'NO', NOX: 'NOx', CO: 'CO', CO2: 'CO2', O3: 'O3', NMHC: 'NMHC', THC: 'THC', CH4: 'CH4'
   };
+  var DIR8 = ['北', '東北', '東', '東南', '南', '西南', '西', '西北'];
   var DIR16 = ['北', '北北東', '東北', '東北東', '東', '東南東', '東南', '南南東',
     '南', '南南西', '西南', '西南西', '西', '西北西', '西北', '北北西'];
 
@@ -76,6 +78,49 @@
     return Math.floor((d + 11.25) / 22.5) % 16;
   }
 
+  /** 風向度數 → 8 方位索引（0 = 北；每方位 45°，北 = 337.5°～22.5°）。直接由度數換算，不是把 16 方位合併（兩者扇區邊界不同） */
+  function dirIndex8(deg) {
+    var d = deg % 360;
+    return Math.floor((d + 22.5) / 45) % 8;
+  }
+  /** 8 方位最頻風向；並列最多時全部列出（規則同 16 方位） */
+  function modeDirection8(degs) {
+    if (!degs.length) return null;
+    var cnt = new Array(8).fill(0);
+    for (var i = 0; i < degs.length; i++) cnt[dirIndex8(degs[i])]++;
+    var mx = Math.max.apply(null, cnt);
+    var out = [];
+    for (var k = 0; k < 8; k++) if (cnt[k] === mx) out.push(DIR8[k]);
+    return out.join('、');
+  }
+
+  /**
+   * 並列時再挑一個的兩種參考算法（報表另外成欄，原本「全部列出」的欄不變）：
+   *  - bySpeed：並列的方位中，取「該方位採計小時的平均風速」最大者；平均風速也相同（或沒有風速欄）才全部列出。
+   *  - byAdj：並列的方位中，各自加上左右相鄰兩個方位的次數，取總和最大者；總和也相同才全部列出。
+   * 沒有並列時兩者都等於一般最頻風向。obs = [{d: 角度, ws: 風速或 null}]；n = 16 或 8。
+   */
+  function modeTieBreak(obs, n) {
+    if (!obs.length) return null;
+    var idx = n === 8 ? dirIndex8 : dirIndex, names = n === 8 ? DIR8 : DIR16;
+    var cnt = new Array(n).fill(0), sum = new Array(n).fill(0), sn = new Array(n).fill(0);
+    obs.forEach(function (o) { var k = idx(o.d); cnt[k]++; if (o.ws !== null && o.ws !== undefined) { sum[k] += o.ws; sn[k]++; } });
+    var mx = Math.max.apply(null, cnt), tied = [];
+    for (var k = 0; k < n; k++) if (cnt[k] === mx) tied.push(k);
+    var pick = function (score) {
+      var best = -Infinity, out = [];
+      tied.forEach(function (k) { var v = score(k); if (v === null) return; if (v > best + 1e-9) { best = v; out = [k]; } else if (Math.abs(v - best) <= 1e-9) out.push(k); });
+      return (out.length ? out : tied).map(function (k) { return names[k]; }).join('、');
+    };
+    if (tied.length === 1) { var one = names[tied[0]]; return { bySpeed: one, byAdj: one, tied: false }; }
+    var allSpeed = tied.every(function (k) { return sn[k] > 0; });
+    return {
+      bySpeed: allSpeed ? pick(function (k) { return sum[k] / sn[k]; }) : tied.map(function (k) { return names[k]; }).join('、'),
+      byAdj: pick(function (k) { return cnt[k] + cnt[(k + 1) % n] + cnt[(k + n - 1) % n]; }),
+      tied: true
+    };
+  }
+
   /** 當日最頻風向；同時有 N 個方位並列最多時，N 個方位全部列出（北起順時針，以「、」分隔），例「北、西北」 */
   function modeDirection(degs) {
     if (!degs.length) return null;
@@ -91,6 +136,17 @@
   var CALM_WS = 0.3; // 風速 < 0.3 m/s 的那一小時，風向不列入最頻風向（剛好 0.3 要計入）
 
   /** 取當日可用於最頻風向的風向值：風向有效，且同一小時風速有效並 ≥ 0.3 */
+  function windObs(rows, hasWS) {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var wd = validValue(rows[i].v.WD);
+      if (wd === null) continue;
+      var ws = hasWS ? validValue(rows[i].v.WS) : null;
+      if (hasWS && (ws === null || ws < CALM_WS)) continue;
+      out.push({ d: wd, ws: ws });
+    }
+    return out;
+  }
   function windDirs(rows, hasWS) {
     var out = [];
     for (var i = 0; i < rows.length; i++) {
@@ -324,6 +380,7 @@
     var vals = {};
     AIR_FIELDS.forEach(function (f) { vals[f] = has(f) ? collect(rows, f, zeroInvalid) : null; });
     if (has('WD')) vals.WD = windDirs(rows, has('WS'));
+    var tb16 = has('WD') ? modeTieBreak(windObs(rows, has('WS')), 16) : null, tb8 = has('WD') ? modeTieBreak(windObs(rows, has('WS')), 8) : null;
     var rec = {
       id: s.id, name: s.name, date: d,
       TMP: vals.TMP ? exactMean1(vals.TMP) : null,
@@ -333,6 +390,9 @@
       TVOC: vals.TVOC ? exactMean1(vals.TVOC) : null,
       WS: vals.WS ? exactMean1(vals.WS) : null,
       WD: vals.WD ? modeDirection(vals.WD) : null,
+      WD8: vals.WD ? modeDirection8(vals.WD) : null,
+      WD16S: tb16 ? tb16.bySpeed : null, WD16A: tb16 ? tb16.byAdj : null,
+      WD8S: tb8 ? tb8.bySpeed : null, WD8A: tb8 ? tb8.byAdj : null,
       RA: vals.RA ? exactSum1(vals.RA) : null,
       hours: {}, note: '',
       fields: AIR_FIELDS.filter(function (f) { return has(f); }) // 這台有的測項（沒有數值時報表寫「－」，沒有這個測項則留白）
@@ -346,7 +406,7 @@
       // 靜風：有風向、風速都有效的小時，但風速全部 < 0.3 → 最頻風向記為「<0.3」（「－」只代表設備異常或維護沒有測值）
       if (!vals.WD.length && has('WS')) {
         var calm = rows.filter(function (r) { return validValue(r.v.WD) !== null && validValue(r.v.WS) !== null; }).length;
-        if (calm) { rec.WD = CALM_TEXT; note += '；全天風速都 < 0.3 m/s（靜風 ' + calm + ' 小時），最頻風向記為「' + CALM_TEXT + '」'; }
+        if (calm) { rec.WD = rec.WD8 = rec.WD16S = rec.WD16A = rec.WD8S = rec.WD8A = CALM_TEXT; note += '；全天風速都 < 0.3 m/s（靜風 ' + calm + ' 小時），最頻風向記為「' + CALM_TEXT + '」'; }
       }
     }
     if (rows.length && rows.length < 24) {
@@ -439,7 +499,7 @@
     validValue: validValue, roundHalfUp1: roundHalfUp1, exactMean1: exactMean1, exactSum1: exactSum1,
     dirIndex: dirIndex, modeDirection: modeDirection, energyMean1: energyMean1, noisePeriod: noisePeriod,
     quarterRange: quarterRange, toRoc: toRoc, addDays: addDays, daysBetween: daysBetween,
-    buildReports: buildReports, DEFAULT_NOISE: DEFAULT_NOISE, noiseCfg: noiseCfg, checkNoise: checkNoise, describeNoise: describeNoise, NOISE_LABEL: NOISE_LABEL, pmRatioClean: pmRatioClean, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs
+    buildReports: buildReports, DEFAULT_NOISE: DEFAULT_NOISE, noiseCfg: noiseCfg, checkNoise: checkNoise, describeNoise: describeNoise, NOISE_LABEL: NOISE_LABEL, pmRatioClean: pmRatioClean, pad: pad, ZERO_INVALID: ZERO_INVALID, CALM_WS: CALM_WS, windDirs: windDirs, modeDirection8: modeDirection8, modeTieBreak: modeTieBreak, windObs: windObs, dirIndex8: dirIndex8, DIR8: DIR8
   };
   root.EnvCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
